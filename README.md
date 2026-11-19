@@ -16,6 +16,7 @@ Depois de editar algum arquivo, clique em ↻ na extensão em `chrome://extensio
 | Ação | Atalho |
 |---|---|
 | Esconder/mostrar a lista de conversas | Alt+S |
+| Desfocar textos (aparecem ao passar o mouse) | Alt+B |
 
 O botão ⚙ pode ser arrastado para qualquer lugar; a posição e o estado ficam salvos.
 

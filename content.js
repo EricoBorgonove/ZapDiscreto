@@ -3,6 +3,7 @@
 
   const state = {
     sidebarHidden: false,
+    blur: false,
     fabPos: null, // { right, bottom } salvo após arrastar
   };
 
@@ -11,8 +12,9 @@
   // ---------------------------------------------------------------------------
   function loadState() {
     return new Promise((resolve) => {
-      chrome.storage.local.get(["sidebarHidden", "fabPos"], (data) => {
+      chrome.storage.local.get(["sidebarHidden", "blur", "fabPos"], (data) => {
         state.sidebarHidden = !!data.sidebarHidden;
+        state.blur = !!data.blur;
         state.fabPos = data.fabPos || null;
         resolve();
       });
@@ -22,6 +24,7 @@
   function saveState() {
     chrome.storage.local.set({
       sidebarHidden: state.sidebarHidden,
+      blur: state.blur,
       fabPos: state.fabPos,
     });
   }
@@ -77,6 +80,20 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Ação: modo desfocado (texto só aparece com o mouse em cima)
+  // ---------------------------------------------------------------------------
+  function applyBlur() {
+    document.documentElement.classList.toggle("we-blur", state.blur);
+    updateMenuLabels();
+  }
+
+  function toggleBlur() {
+    state.blur = !state.blur;
+    saveState();
+    applyBlur();
+  }
+
+  // ---------------------------------------------------------------------------
   // Lista de ações do menu (adicione novas aqui)
   // ---------------------------------------------------------------------------
   const actions = [
@@ -85,7 +102,15 @@
       label: () =>
         state.sidebarHidden ? "Mostrar conversas" : "Esconder conversas",
       shortcut: "Alt+S",
+      key: "KeyS",
       run: toggleSidebar,
+    },
+    {
+      id: "toggle-blur",
+      label: () => (state.blur ? "Desativar desfoque" : "Desfocar textos"),
+      shortcut: "Alt+B",
+      key: "KeyB",
+      run: toggleBlur,
     },
   ];
 
@@ -207,9 +232,11 @@
   document.addEventListener(
     "keydown",
     (e) => {
-      if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyS") {
+      if (!e.altKey || e.ctrlKey || e.shiftKey || e.metaKey) return;
+      const action = actions.find((a) => a.key === e.code);
+      if (action) {
         e.preventDefault();
-        toggleSidebar();
+        action.run();
       }
     },
     true
@@ -231,6 +258,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
 
     applySidebar();
+    applyBlur();
   }
 
   init();

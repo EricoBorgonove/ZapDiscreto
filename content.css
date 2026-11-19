@@ -3,6 +3,23 @@
   display: none !important;
 }
 
+/* ---------- Modo desfocado ---------- */
+/* Mensagens, itens da lista de conversas e cabeçalho da conversa */
+html.we-blur #main [role="row"],
+html.we-blur #main header,
+html.we-blur #pane-side [role="listitem"],
+html.we-blur #pane-side [role="row"] {
+  filter: blur(6px);
+  transition: filter 0.15s ease;
+}
+
+html.we-blur #main [role="row"]:hover,
+html.we-blur #main header:hover,
+html.we-blur #pane-side [role="listitem"]:hover,
+html.we-blur #pane-side [role="row"]:hover {
+  filter: none;
+}
+
 /* ---------- Botão flutuante ---------- */
 #we-root {
   position: fixed;
