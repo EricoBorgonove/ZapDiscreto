@@ -84,7 +84,20 @@
   // ---------------------------------------------------------------------------
   // Modo lateral: aplica o modo atual e desfaz os outros
   // ---------------------------------------------------------------------------
+  // Pausa: o usuário abriu outra seção da barra de ícones (Status, Canais,
+  // Comunidades, Configurações...). O WhatsApp funciona normalmente até
+  // ele voltar para Conversas; o modo salvo não muda.
+  let suspended = false;
+  let layoutParent = null; // container da barra de ícones + coluna + conversa
+  let layoutCol = null; // coluna da esquerda
+
   function applySidebar() {
+    if (suspended) {
+      clearAvatars();
+      clearHidden();
+      updateMenuLabels();
+      return;
+    }
     if (!isAvatars()) clearAvatars();
     if (!colHidden()) clearHidden();
     if (colHidden()) applyHidden();
@@ -114,6 +127,7 @@
   }
 
   function setSidebarMode(mode) {
+    suspended = false;
     state.sidebarMode = mode;
     saveState();
     applySidebar();
@@ -134,6 +148,8 @@
     if (!col) return;
     if (loopDetected()) return;
     hiddenEl = col;
+    layoutCol = col;
+    layoutParent = col.parentElement;
     // Guarda onde a lista terminava (bordas soltas ficam nessa posição)
     hiddenEdge = col.getBoundingClientRect().right;
     // Só esconde a coluna: o painel da conversa já tem flex-grow
@@ -206,12 +222,47 @@
     if (!hiddenEl.parentElement.contains(btn)) return null;
     const main = document.getElementById("main");
     if (main && main.contains(btn)) return null;
+    return isChatsLabel(btn) ? btn : null;
+  }
 
+  function isChatsLabel(btn) {
     const label = btn.getAttribute("aria-label") || btn.title || "";
-    if (/conversas|chats/i.test(label)) return btn;
+    if (/conversas|chats/i.test(label)) return true;
     const icon = btn.querySelector("[data-icon]");
-    if (icon && /^chats?(-|$)/i.test(icon.dataset.icon)) return btn;
-    return null;
+    return !!(icon && /^chats?(-|$)/i.test(icon.dataset.icon));
+  }
+
+  // Botão da barra de ícones da esquerda (fora da coluna e da conversa)
+  function isRailButton(btn) {
+    if (!layoutParent || !layoutParent.contains(btn)) return false;
+    if (layoutCol && layoutCol.contains(btn)) return false;
+    const main = document.getElementById("main");
+    if (main && main.contains(btn)) return false;
+    const r = btn.getBoundingClientRect();
+    const p = layoutParent.getBoundingClientRect();
+    return r.width > 0 && r.right <= p.left + 120;
+  }
+
+  // Clique em Status/Canais/etc. pausa; clique em Conversas retoma
+  function onRailClick(e) {
+    if (!colHidden() || !e.target.closest) return;
+    if (!layoutParent || !layoutParent.isConnected) {
+      const col = findSidebarColumn();
+      if (!col) return;
+      layoutCol = col;
+      layoutParent = col.parentElement;
+    }
+    const btn = e.target.closest('button, [role="button"], a');
+    if (!btn || !isRailButton(btn)) return;
+
+    const chats = isChatsLabel(btn);
+    if (chats && suspended) {
+      suspended = false;
+      applySidebar();
+    } else if (!chats && !suspended) {
+      suspended = true;
+      applySidebar();
+    }
   }
 
   function openFloat(btn) {
@@ -485,6 +536,9 @@
 
     window.addEventListener("resize", positionStrip);
 
+    // Captura antes do WhatsApp redesenhar a tela
+    document.addEventListener("click", onRailClick, true);
+
     // Clique fora da lateral flutuante -> fecha
     document.addEventListener("mousedown", (e) => {
       if (!floatOpen || !hiddenEl) return;
@@ -680,7 +734,7 @@
 
     let fixTimer = null;
     const observer = new MutationObserver((records) => {
-      if (!colHidden()) return;
+      if (!colHidden() || suspended) return;
       if (records.every((r) => isOurs(r.target))) return;
 
       if (!(hiddenEl && hiddenEl.isConnected)) applySidebar();
