@@ -5,6 +5,7 @@
     sidebarMode: "visible", // "visible" | "hidden" | "avatars"
     blur: false,
     fabPos: null, // { right, bottom } salvo após arrastar
+    btnSize: 44, // diâmetro do botão verde em px (o amarelo acompanha)
     // Botão de pânico: se aparece e o que ele faz
     panic: { enabled: true, blur: true, hide: true, cover: false },
   };
@@ -24,8 +25,9 @@
   function loadState() {
     return new Promise((resolve) => {
       chrome.storage.local.get(
-        ["sidebarMode", "sidebarHidden", "blur", "fabPos", "panic"],
+        ["sidebarMode", "sidebarHidden", "blur", "fabPos", "panic", "btnSize"],
         (data) => {
+          if (data.btnSize) state.btnSize = data.btnSize;
           state.panic = { ...state.panic, ...(data.panic || {}) };
           // Compatível com a versão antiga (sidebarHidden: true/false)
           state.sidebarMode =
@@ -45,6 +47,7 @@
       sidebarMode: saved.sidebarMode,
       blur: saved.blur,
       fabPos: state.fabPos,
+      btnSize: state.btnSize,
       panic: state.panic,
     });
   }
@@ -723,12 +726,78 @@
       { separator: "" },
       { label: "Botão de pânico", submenu: true, keepOpen: true,
         run: () => (menuView = "panic") },
+      { slider: true },
     ];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tamanho dos botões (controle deslizante no menu)
+  // ---------------------------------------------------------------------------
+  const BTN_MIN = 28;
+  const BTN_MAX = 72;
+  let sizeSaveTimer = null;
+
+  function applyBtnSize() {
+    if (root) root.style.setProperty("--we-size", state.btnSize + "px");
+  }
+
+  function setBtnSize(px) {
+    state.btnSize = clamp(Math.round(px), BTN_MIN, BTN_MAX);
+    applyBtnSize();
+    keepRootOnScreen();
+    // Salva só quando parar de arrastar
+    clearTimeout(sizeSaveTimer);
+    sizeSaveTimer = setTimeout(saveState, 300);
+  }
+
+  // Botões maiores não podem sair da tela
+  function keepRootOnScreen() {
+    const r = root.getBoundingClientRect();
+    if (r.left < 0) {
+      root.style.right = window.innerWidth - root.offsetWidth + "px";
+    }
+    if (r.top < 0) {
+      root.style.bottom = window.innerHeight - root.offsetHeight + "px";
+    }
+  }
+
+  function buildSizeSlider() {
+    const row = document.createElement("div");
+    row.className = "we-slider-row";
+
+    const label = document.createElement("div");
+    label.className = "we-slider-label";
+    const name = document.createElement("span");
+    name.textContent = "Tamanho dos botões";
+    const value = document.createElement("span");
+    value.className = "we-kbd";
+    value.textContent = state.btnSize + "px";
+    label.append(name, value);
+
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = BTN_MIN;
+    input.max = BTN_MAX;
+    input.step = 1;
+    input.value = state.btnSize;
+    input.addEventListener("input", () => {
+      setBtnSize(Number(input.value));
+      value.textContent = state.btnSize + "px";
+    });
+
+    // Interagir com o controle não fecha nem redesenha o menu
+    for (const ev of ["click", "pointerdown", "mousedown"]) {
+      row.addEventListener(ev, (e) => e.stopPropagation());
+    }
+
+    row.append(label, input);
+    return row;
   }
 
   function renderMenu() {
     if (!menu) return;
     const els = menuItems().map((item) => {
+      if (item.slider) return buildSizeSlider();
       if ("separator" in item) {
         const sep = document.createElement("div");
         sep.className = "we-sep";
@@ -789,6 +858,7 @@
     root.appendChild(panicBtn);
     root.appendChild(fab);
     document.body.appendChild(root);
+    applyBtnSize();
     updatePanicButton();
 
     if (state.fabPos) {

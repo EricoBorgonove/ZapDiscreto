@@ -156,20 +156,21 @@ html.we-blur #pane-side [role="row"]:hover {
 
 /* ---------- Botão flutuante ---------- */
 #we-root {
+  --we-size: 44px; /* ajustado pelo controle "Tamanho dos botões" */
   position: fixed;
   right: 24px;
   bottom: 96px;
   z-index: 99999;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: calc(var(--we-size) * 0.22);
   font-family: Segoe UI, Helvetica, Arial, sans-serif;
 }
 
 /* ---------- Botão de pânico ---------- */
 #we-panic {
-  width: 40px;
-  height: 40px;
+  width: calc(var(--we-size) * 0.9);
+  height: calc(var(--we-size) * 0.9);
   border-radius: 50%;
   border: none;
   background: #f5c518;
@@ -181,6 +182,11 @@ html.we-blur #pane-side [role="row"]:hover {
   justify-content: center;
   padding: 0;
   transition: transform 0.15s, background 0.15s;
+}
+
+#we-panic svg {
+  width: 55%;
+  height: 55%;
 }
 
 #we-panic[hidden] {
@@ -223,13 +229,14 @@ html.we-blur #pane-side [role="row"]:hover {
 }
 
 #we-fab {
-  width: 44px;
-  height: 44px;
+  width: var(--we-size);
+  height: var(--we-size);
   border-radius: 50%;
   border: none;
   background: #00a884;
   color: #fff;
-  font-size: 20px;
+  font-size: calc(var(--we-size) * 0.45);
+  padding: 0;
   cursor: grab;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   display: flex;
@@ -250,7 +257,7 @@ html.we-blur #pane-side [role="row"]:hover {
 
 #we-menu {
   position: absolute;
-  bottom: 54px;
+  bottom: calc(var(--we-size) + 10px);
   right: 0;
   min-width: 230px;
   background: #fff;
@@ -268,7 +275,28 @@ html.we-blur #pane-side [role="row"]:hover {
 /* Menu abre para baixo quando o botão está na metade de cima da tela */
 #we-root.we-menu-down #we-menu {
   bottom: auto;
-  top: 54px;
+  top: calc(var(--we-size) + 10px);
+}
+
+/* Controle deslizante do tamanho dos botões */
+.we-slider-row {
+  padding: 8px 16px 10px;
+  border-top: 1px solid rgba(134, 150, 160, 0.2);
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.we-slider-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.we-slider-row input[type="range"] {
+  width: 100%;
+  accent-color: #00a884;
+  cursor: pointer;
 }
 
 .we-item {
