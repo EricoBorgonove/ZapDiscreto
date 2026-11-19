@@ -3,13 +3,38 @@
   display: none !important;
 }
 
+/* Lateral aberta como painel flutuante (hover no botão de Conversas) */
+.we-hidden-sidebar.we-float {
+  display: flex !important;
+  position: fixed !important;
+  left: var(--we-left, 64px);
+  top: var(--we-top, 0px);
+  height: var(--we-height, 100vh);
+  width: min(420px, 45vw) !important;
+  max-width: none !important;
+  z-index: 1000;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+  animation: we-slide-in 0.12s ease-out;
+}
+
+@keyframes we-slide-in {
+  from {
+    transform: translateX(-12px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
 /* ---------- Modo desfocado ---------- */
 /* Mensagens, itens da lista de conversas e cabeçalho da conversa */
 html.we-blur #main [role="row"],
 html.we-blur #main header,
 html.we-blur #pane-side [role="listitem"],
 html.we-blur #pane-side [role="row"] {
-  filter: blur(6px);
+  filter: blur(4px);
   transition: filter 0.15s ease;
 }
 

@@ -58,6 +58,7 @@
       // Se já está escondida e ainda no DOM, nada a fazer
       if (hiddenEl && hiddenEl.isConnected) return;
 
+      floatOpen = false;
       const col = findSidebarColumn();
       if (!col) return;
       hiddenEl = col;
@@ -65,12 +66,124 @@
       // e ocupa o espaço livre sozinho.
       col.classList.add("we-hidden-sidebar");
     } else {
+      closeFloat();
       document
         .querySelectorAll(".we-hidden-sidebar")
         .forEach((el) => el.classList.remove("we-hidden-sidebar"));
       hiddenEl = null;
     }
     updateMenuLabels();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lateral flutuante: hover no botão "Conversas" da barra de ícones
+  // ---------------------------------------------------------------------------
+  let floatOpen = false;
+  let closeTimer = null;
+
+  // O botão "Conversas" fica na barra de ícones (irmã da coluna escondida)
+  function getChatsButton(target) {
+    if (!hiddenEl || !target || !target.closest) return null;
+    const btn = target.closest('button, [role="button"], a');
+    if (!btn || hiddenEl.contains(btn)) return null;
+    if (!hiddenEl.parentElement.contains(btn)) return null;
+    const main = document.getElementById("main");
+    if (main && main.contains(btn)) return null;
+
+    const label = btn.getAttribute("aria-label") || btn.title || "";
+    if (/conversas|chats/i.test(label)) return btn;
+    const icon = btn.querySelector("[data-icon]");
+    if (icon && /^chats?(-|$)/i.test(icon.dataset.icon)) return btn;
+    return null;
+  }
+
+  // Primeira cor de fundo não transparente subindo na árvore
+  function findBackground(el) {
+    for (let e = el; e; e = e.parentElement) {
+      const bg = getComputedStyle(e).backgroundColor;
+      if (bg && bg !== "transparent" && !/rgba\(.*,\s*0\)$/.test(bg)) return bg;
+    }
+    return "#fff";
+  }
+
+  function openFloat(btn) {
+    clearTimeout(closeTimer);
+    if (floatOpen || !hiddenEl) return;
+
+    const parent = hiddenEl.parentElement;
+    const rail = [...parent.children].find((c) => c.contains(btn)) || btn;
+    const railRect = rail.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+
+    hiddenEl.style.setProperty("--we-left", railRect.right + "px");
+    hiddenEl.style.setProperty("--we-top", parentRect.top + "px");
+    hiddenEl.style.setProperty("--we-height", parentRect.height + "px");
+    hiddenEl.style.background = findBackground(hiddenEl);
+    hiddenEl.classList.add("we-float");
+    floatOpen = true;
+  }
+
+  function closeFloat() {
+    clearTimeout(closeTimer);
+    floatOpen = false;
+    document.querySelectorAll(".we-float").forEach((el) => {
+      el.classList.remove("we-float");
+      el.style.removeProperty("--we-left");
+      el.style.removeProperty("--we-top");
+      el.style.removeProperty("--we-height");
+      el.style.background = "";
+    });
+  }
+
+  // Mantém aberto enquanto o usuário digita na busca da lateral
+  function isTypingInFloat() {
+    const a = document.activeElement;
+    return (
+      hiddenEl &&
+      hiddenEl.contains(a) &&
+      a.matches('input, textarea, [contenteditable="true"]')
+    );
+  }
+
+  function scheduleClose(delay = 300) {
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(() => {
+      if (!isTypingInFloat()) closeFloat();
+    }, delay);
+  }
+
+  function setupFloat() {
+    document.addEventListener("mouseover", (e) => {
+      if (!state.sidebarHidden || !hiddenEl) return;
+      const btn = getChatsButton(e.target);
+      if (btn) return openFloat(btn);
+      if (!floatOpen) return;
+      if (hiddenEl.contains(e.target)) clearTimeout(closeTimer);
+      else scheduleClose();
+    });
+
+    document.documentElement.addEventListener("mouseleave", () => {
+      if (floatOpen) scheduleClose();
+    });
+
+    // Escolheu uma conversa -> fecha
+    document.addEventListener("click", (e) => {
+      if (!floatOpen || !hiddenEl) return;
+      const pane = document.getElementById("pane-side");
+      if (pane && pane.contains(e.target)) scheduleClose(150);
+    });
+
+    // Clique fora da lateral -> fecha
+    document.addEventListener("mousedown", (e) => {
+      if (!floatOpen || !hiddenEl) return;
+      if (!hiddenEl.contains(e.target) && !getChatsButton(e.target)) {
+        closeFloat();
+      }
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (floatOpen && e.key === "Escape") closeFloat();
+    });
   }
 
   function toggleSidebar() {
@@ -248,6 +361,7 @@
   async function init() {
     await loadState();
     buildUI();
+    setupFloat();
 
     // O WhatsApp recria partes da página com frequência; reaplica quando preciso
     const observer = new MutationObserver(() => {
