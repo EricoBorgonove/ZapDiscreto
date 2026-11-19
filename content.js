@@ -658,6 +658,10 @@
   // ---------------------------------------------------------------------------
   const PIP_ROWS = 40; // quantas mensagens recentes mostrar
   let pipWin = null;
+  let pipMode = null; // "full" (WhatsApp de verdade) | "lite" (cópia)
+  let pipAppRoot = null; // raiz do WhatsApp movida para a janela
+  let pipPlaceholder = null; // aviso que fica na aba enquanto isso
+  let pipHeadObserver = null;
   let pipObserver = null;
   let pipTimer = null;
   let pipSig = "";
@@ -686,26 +690,173 @@
       background: rgba(0,0,0,.3); }
   `;
 
+  async function openPipWindow(width, height) {
+    if (!("documentPictureInPicture" in window)) {
+      alert("Seu Chrome não suporta janela flutuante (precisa do Chrome 116 ou mais novo).");
+      return null;
+    }
+    try {
+      return await documentPictureInPicture.requestWindow({ width, height });
+    } catch (err) {
+      console.warn("[Whats Edit] não foi possível abrir a janela flutuante:", err);
+      return null;
+    }
+  }
+
+  // Copia estilos e atributos de tema do WhatsApp para a janela
+  function copyStyles(doc) {
+    for (const node of document.querySelectorAll('link[rel="stylesheet"], style')) {
+      copyStyleNode(node, doc);
+    }
+    for (const attr of document.documentElement.attributes) {
+      if (attr.name !== "style") doc.documentElement.setAttribute(attr.name, attr.value);
+    }
+    for (const attr of document.body.attributes) {
+      if (attr.name !== "style") doc.body.setAttribute(attr.name, attr.value);
+    }
+  }
+
+  function copyStyleNode(node, doc) {
+    if (node.tagName === "LINK") {
+      const copy = node.cloneNode(true);
+      copy.href = node.href;
+      doc.head.appendChild(copy);
+      return;
+    }
+    // <style>: usa as regras atuais (inclui as inseridas via JavaScript)
+    const copy = doc.createElement("style");
+    try {
+      copy.textContent = [...node.sheet.cssRules].map((r) => r.cssText).join("\n");
+    } catch {
+      copy.textContent = node.textContent;
+    }
+    doc.head.appendChild(copy);
+  }
+
+  // ---- Modo completo: move o WhatsApp de verdade para a janela ----------
+
+  // Raiz do app do WhatsApp: o ancestral de #app que é filho direto do body
+  function findAppRoot() {
+    let el = document.getElementById("app");
+    while (el && el.parentElement && el.parentElement !== document.body) {
+      el = el.parentElement;
+    }
+    return el && el.parentElement === document.body ? el : null;
+  }
+
   async function togglePip() {
     if (pipWin) {
       pipWin.close();
       return;
     }
-    if (!("documentPictureInPicture" in window)) {
-      alert("Seu Chrome não suporta janela flutuante (precisa do Chrome 116 ou mais novo).");
+    const appRoot = findAppRoot();
+    if (!appRoot) {
+      alert("Não encontrei o WhatsApp na página. Espere carregar e tente de novo.");
       return;
     }
     if (!document.getElementById("main")) {
       alert("Abra uma conversa primeiro.");
       return;
     }
-    try {
-      pipWin = await documentPictureInPicture.requestWindow({ width: 400, height: 560 });
-    } catch (err) {
-      console.warn("[Whats Edit] não foi possível abrir a janela flutuante:", err);
-      pipWin = null;
+    const win = await openPipWindow(420, 640);
+    if (!win) return;
+    pipWin = win;
+    pipMode = "full";
+
+    const doc = win.document;
+    copyStyles(doc);
+    doc.title = "WhatsApp";
+    const base = doc.createElement("style");
+    base.textContent = `
+      html, body { margin: 0; height: 100%; overflow: hidden; }
+      /* Só a conversa: esconde barra de ícones e lista de conversas */
+      .we-pip-hide { display: none !important; }
+      .we-pip-main { flex: 1 1 auto !important; width: 100% !important;
+        max-width: none !important; min-width: 0 !important;
+        margin-left: 0 !important; border-left: none !important; }
+    `;
+    doc.head.appendChild(base);
+
+    // Estilos que o WhatsApp carregar depois (ex.: painel de emojis)
+    pipHeadObserver = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of r.addedNodes) {
+          if (n.tagName === "STYLE" || (n.tagName === "LINK" && n.rel === "stylesheet")) {
+            copyStyleNode(n, doc);
+          }
+        }
+      }
+    });
+    pipHeadObserver.observe(document.head, { childList: true });
+
+    // Aviso na aba enquanto o WhatsApp está na janela
+    pipPlaceholder = document.createElement("div");
+    pipPlaceholder.id = "we-pip-placeholder";
+    pipPlaceholder.innerHTML = `
+      <div>O WhatsApp está aberto na janela flutuante</div>
+      <button type="button">Trazer de volta</button>`;
+    pipPlaceholder
+      .querySelector("button")
+      .addEventListener("click", () => pipWin && pipWin.close());
+
+    pipAppRoot = appRoot;
+    document.body.insertBefore(pipPlaceholder, appRoot);
+    doc.body.appendChild(appRoot);
+    pipOnlyChat();
+
+    // O WhatsApp redesenha partes da tela; reaplica "só a conversa"
+    pipObserver = new MutationObserver(() => {
+      if (!pipWin) return;
+      pipWin.clearTimeout(pipTimer);
+      pipTimer = pipWin.setTimeout(pipOnlyChat, 100);
+    });
+    pipObserver.observe(doc.body, { childList: true, subtree: true });
+
+    win.addEventListener("pagehide", cleanupPip);
+    updateMenuLabels();
+  }
+
+  // Na janela, deixa só o painel da conversa: no container que tem a lista
+  // (#side) e a conversa (#main), esconde os outros itens do layout.
+  // Camadas sobrepostas (absolute/fixed) ficam, pois hospedam menus e painéis.
+  function pipOnlyChat() {
+    if (!pipWin || !pipAppRoot) return;
+    const main = pipAppRoot.querySelector("#main");
+    const side = pipAppRoot.querySelector("#side");
+    if (!main || !side) return;
+
+    // Menor ancestral comum de #main e #side
+    let layout = main.parentElement;
+    while (layout && !layout.contains(side)) layout = layout.parentElement;
+    if (!layout) return;
+
+    const view = pipWin;
+    for (const child of layout.children) {
+      if (child.contains(main)) {
+        child.classList.add("we-pip-main");
+        continue;
+      }
+      const pos = view.getComputedStyle(child).position;
+      if (pos === "absolute" || pos === "fixed") continue;
+      child.classList.add("we-pip-hide");
+    }
+  }
+
+  // ---- Modo leve: cópia ao vivo da conversa + campo de resposta ---------
+
+  async function toggleLitePip() {
+    if (pipWin) {
+      pipWin.close();
       return;
     }
+    if (!document.getElementById("main")) {
+      alert("Abra uma conversa primeiro.");
+      return;
+    }
+    const win = await openPipWindow(400, 560);
+    if (!win) return;
+    pipWin = win;
+    pipMode = "lite";
 
     setupPipDocument(pipWin.document);
     pipWin.addEventListener("pagehide", cleanupPip);
@@ -722,9 +873,26 @@
   }
 
   function cleanupPip() {
+    // Modo completo: devolve o WhatsApp para a aba
+    if (pipObserver) pipObserver.disconnect();
+    if (pipAppRoot) {
+      pipAppRoot
+        .querySelectorAll(".we-pip-hide, .we-pip-main")
+        .forEach((el) => el.classList.remove("we-pip-hide", "we-pip-main"));
+    }
+    if (pipAppRoot && pipPlaceholder) {
+      pipPlaceholder.replaceWith(pipAppRoot);
+    }
+    if (pipPlaceholder) pipPlaceholder.remove();
+    pipAppRoot = null;
+    pipPlaceholder = null;
+    if (pipHeadObserver) pipHeadObserver.disconnect();
+    pipHeadObserver = null;
+
     if (pipObserver) pipObserver.disconnect();
     pipObserver = null;
     pipWin = null;
+    pipMode = null;
     pipSig = "";
     updateMenuLabels();
   }
@@ -749,17 +917,7 @@
 
   function setupPipDocument(doc) {
     // Mesmos estilos e tema do WhatsApp, para as mensagens copiadas
-    for (const node of document.querySelectorAll('link[rel="stylesheet"], style')) {
-      const copy = node.cloneNode(true);
-      if (copy.tagName === "LINK") copy.href = node.href;
-      doc.head.appendChild(copy);
-    }
-    for (const attr of document.documentElement.attributes) {
-      if (attr.name !== "style") doc.documentElement.setAttribute(attr.name, attr.value);
-    }
-    for (const attr of document.body.attributes) {
-      if (attr.name !== "style") doc.body.setAttribute(attr.name, attr.value);
-    }
+    copyStyles(doc);
     const style = doc.createElement("style");
     style.textContent = PIP_CSS;
     doc.head.appendChild(style);
@@ -984,6 +1142,12 @@
       key: "KeyJ",
       run: togglePip,
     },
+    {
+      id: "pip-lite",
+      label: () => "Janela flutuante leve (cópia)",
+      menu: () => !pipWin, // some enquanto alguma janela está aberta
+      run: toggleLitePip,
+    },
   ];
 
   // ---------------------------------------------------------------------------
@@ -1022,7 +1186,7 @@
     }
     return [
       ...actions
-        .filter((a) => a.menu !== false)
+        .filter((a) => (typeof a.menu === "function" ? a.menu() : a.menu !== false))
         .map((a) => ({ label: a.label(), shortcut: a.shortcut, run: a.run })),
       { separator: "" },
       { label: "Botão de pânico", submenu: true, keepOpen: true,
@@ -1265,7 +1429,9 @@
     const isOurs = (node) => {
       const el = node.nodeType === 1 ? node : node.parentElement;
       return !!(
-        el && el.closest && el.closest("#we-root, #we-strip, #we-card, #we-cover")
+        el &&
+        el.closest &&
+        el.closest("#we-root, #we-strip, #we-card, #we-cover, #we-pip-placeholder")
       );
     };
 
