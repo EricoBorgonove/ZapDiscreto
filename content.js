@@ -75,9 +75,9 @@
   }
 
   // Primeira cor de fundo não transparente subindo na árvore
-  function findBackground(el) {
+  function findBackground(el, view = window) {
     for (let e = el; e; e = e.parentElement) {
-      const bg = getComputedStyle(e).backgroundColor;
+      const bg = view.getComputedStyle(e).backgroundColor;
       if (bg && bg !== "transparent" && !/rgba\(.*,\s*0\)$/.test(bg)) return bg;
     }
     return "#fff";
@@ -398,8 +398,9 @@
     stripTimer = setTimeout(renderStrip, 400);
   }
 
-  function getChatRows() {
-    const pane = document.getElementById("pane-side");
+  // root: documento ou elemento onde procurar (a janela flutuante usa o dela)
+  function getChatRows(root = document) {
+    const pane = root.querySelector("#pane-side");
     if (!pane) return [];
     let rows = [...pane.querySelectorAll('[role="listitem"]')];
     if (!rows.length) rows = [...pane.querySelectorAll('[role="row"]')];
@@ -436,29 +437,7 @@
 
     const items = rows.map((row, idx) => {
       const info = infos[idx];
-      const item = document.createElement("div");
-      item.className = "we-av-item";
-      item.title = "";
-
-      if (info.img) {
-        const img = document.createElement("img");
-        img.src = info.img;
-        img.alt = "";
-        item.appendChild(img);
-      } else {
-        const ini = document.createElement("div");
-        ini.className = "we-av-initials";
-        ini.textContent = (info.name.trim()[0] || "?").toUpperCase();
-        item.appendChild(ini);
-      }
-
-      if (info.unread) {
-        const badge = document.createElement("span");
-        badge.className = "we-av-badge";
-        badge.textContent = info.unread;
-        item.appendChild(badge);
-      }
-
+      const item = makeAvatarItem(document, info);
       item.addEventListener("click", () => openChat(row, info.name));
       item.addEventListener("mouseenter", () => showCard(row, item));
       item.addEventListener("mouseleave", hideCard);
@@ -468,15 +447,51 @@
     strip.replaceChildren(...items);
   }
 
+  // Foto (ou inicial) + contador de não lidas de uma conversa
+  function makeAvatarItem(doc, info) {
+    const item = doc.createElement("div");
+    item.className = "we-av-item";
+
+    if (info.img) {
+      const img = doc.createElement("img");
+      img.src = info.img;
+      img.alt = "";
+      item.appendChild(img);
+    } else {
+      const ini = doc.createElement("div");
+      ini.className = "we-av-initials";
+      ini.textContent = (info.name.trim()[0] || "?").toUpperCase();
+      item.appendChild(ini);
+    }
+
+    if (info.unread) {
+      const badge = doc.createElement("span");
+      badge.className = "we-av-badge";
+      badge.textContent = info.unread;
+      item.appendChild(badge);
+    }
+    return item;
+  }
+
+  // O WhatsApp marca a conversa aberta com aria-selected dentro da linha
+  function isSelectedRow(row) {
+    return (
+      row.getAttribute("aria-selected") === "true" ||
+      !!row.querySelector('[aria-selected="true"]')
+    );
+  }
+
   // Abre a conversa simulando um clique na linha original (escondida)
-  function openChat(row, name) {
+  function openChat(row, name, root = document) {
     if (!row.isConnected && name) {
-      row = getChatRows().find((r) => rowInfo(r).name === name) || row;
+      row = getChatRows(root).find((r) => rowInfo(r).name === name) || row;
     }
     const target = row.querySelector("span[title]") || row;
+    // A janela certa (aba ou janela flutuante) para o evento
+    const view = target.ownerDocument.defaultView || window;
     for (const type of ["mousedown", "mouseup", "click"]) {
       target.dispatchEvent(
-        new MouseEvent(type, { bubbles: true, cancelable: true, view: window })
+        new view.MouseEvent(type, { bubbles: true, cancelable: true, view })
       );
     }
   }
@@ -662,6 +677,9 @@
   let pipAppRoot = null; // raiz do WhatsApp movida para a janela
   let pipPlaceholder = null; // aviso que fica na aba enquanto isso
   let pipHeadObserver = null;
+  const PIP_STRIP = 56; // largura da faixa de fotos na janela
+  let pipStrip = null;
+  let pipStripKey = "";
   let pipObserver = null;
   let pipTimer = null;
   let pipSig = "";
@@ -771,9 +789,63 @@
       html, body { margin: 0; height: 100%; overflow: hidden; }
       /* Só a conversa: esconde barra de ícones e lista de conversas */
       .we-pip-hide { display: none !important; }
-      .we-pip-main { flex: 1 1 auto !important; width: 100% !important;
+      /* Mesmas correções da linha branca usadas na aba (content.css) */
+      .we-no-border, .we-no-border > div, .we-no-border #main {
+        border-left: none !important; }
+      .we-divider-hidden { visibility: hidden !important; }
+      .we-divider-noborder { border-left: none !important; border-right: none !important; }
+      /* Lista de conversas: fora da tela, mas com tamanho real, para o
+         WhatsApp continuar carregando as conversas usadas pela faixa */
+      .we-pip-offscreen { position: fixed !important; left: -10000px !important;
+        top: 0 !important; width: 360px !important; height: 100vh !important;
+        visibility: hidden !important; pointer-events: none !important; }
+      .we-pip-layout { min-width: 0 !important; width: 100% !important; }
+      .we-pip-main { flex: 1 1 auto !important; width: auto !important;
         max-width: none !important; min-width: 0 !important;
-        margin-left: 0 !important; border-left: none !important; }
+        margin-left: ${PIP_STRIP}px !important; border-left: none !important;
+        box-sizing: border-box !important;
+        padding-bottom: var(--we-bar-h, 56px) !important; }
+
+      /* A barra de digitar original quebra aqui dentro: fica escondida e a
+         nossa barra (#we-pip-bar) envia pela aba */
+      .we-pip-main footer { display: none !important; }
+      #we-pip-bar { position: fixed; left: ${PIP_STRIP}px; right: 0; bottom: 0;
+        z-index: 2147483000; box-sizing: border-box; padding: 8px 10px;
+        display: flex; align-items: flex-end; gap: 8px; background: #f0f2f5; }
+      .dark #we-pip-bar { background: #202c33; }
+      #we-pip-bar textarea { flex: 1; resize: none; box-sizing: border-box;
+        max-height: 120px; padding: 9px 12px; border: none; border-radius: 8px;
+        outline: none; background: #fff; color: #111b21;
+        font: 15px Segoe UI, Helvetica, Arial, sans-serif; line-height: 20px; }
+      .dark #we-pip-bar textarea { background: #2a3942; color: #e9edef; }
+      #we-pip-bar textarea.we-error { box-shadow: 0 0 0 2px #e5534b; }
+      #we-pip-bar button { flex: 0 0 38px; height: 38px; border: none;
+        border-radius: 50%; background: #00a884; color: #fff; font-size: 16px;
+        cursor: pointer; }
+      #we-pip-bar button:disabled { opacity: .5; cursor: default; }
+
+      /* Faixa de fotos para trocar de conversa */
+      /* z-index alto: as camadas do WhatsApp ficavam por cima da faixa */
+      #we-pip-strip { position: fixed; left: 0; top: 0; bottom: 0; z-index: 2147483000;
+        width: ${PIP_STRIP}px; box-sizing: border-box; padding: 8px 0;
+        overflow-y: auto; scrollbar-width: none;
+        display: flex; flex-direction: column; align-items: center; gap: 8px; }
+      #we-pip-strip .we-av-item { position: relative; flex: 0 0 40px;
+        width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
+      #we-pip-strip .we-av-item:hover,
+      #we-pip-strip .we-av-item.we-current { outline: 2px solid #00a884;
+        outline-offset: 2px; }
+      #we-pip-strip .we-av-item img, #we-pip-strip .we-av-initials {
+        display: block; width: 40px; height: 40px; border-radius: 50%;
+        object-fit: cover; }
+      #we-pip-strip .we-av-initials { display: flex; align-items: center;
+        justify-content: center; background: #6a7175; color: #fff;
+        font: 600 16px Segoe UI, Helvetica, Arial, sans-serif; }
+      #we-pip-strip .we-av-badge { position: absolute; top: -3px; right: -5px;
+        box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 4px;
+        border-radius: 8px; background: #25d366; color: #111b21;
+        font: 600 10px Segoe UI, Helvetica, Arial, sans-serif;
+        display: flex; align-items: center; justify-content: center; }
     `;
     doc.head.appendChild(base);
 
@@ -801,8 +873,10 @@
 
     pipAppRoot = appRoot;
     document.body.insertBefore(pipPlaceholder, appRoot);
+    pipBlurComposer();
     doc.body.appendChild(appRoot);
     pipOnlyChat();
+    buildPipBar(doc);
 
     // O WhatsApp redesenha partes da tela; reaplica "só a conversa"
     pipObserver = new MutationObserver(() => {
@@ -830,16 +904,165 @@
     while (layout && !layout.contains(side)) layout = layout.parentElement;
     if (!layout) return;
 
+    // O layout do WhatsApp tem largura mínima (~748px) e estoura a janela
+    layout.classList.add("we-pip-layout");
+
     const view = pipWin;
     for (const child of layout.children) {
       if (child.contains(main)) {
         child.classList.add("we-pip-main");
         continue;
       }
+      if (child.contains(side)) {
+        child.classList.add("we-pip-offscreen");
+        continue;
+      }
       const pos = view.getComputedStyle(child).position;
       if (pos === "absolute" || pos === "fixed") continue;
       child.classList.add("we-pip-hide");
     }
+
+    renderPipStrip(side);
+  }
+
+  // Faixa de fotos dentro da janela flutuante: clicar troca a conversa
+  function renderPipStrip(side) {
+    const d = pipWin.document;
+    if (!pipStrip || !pipStrip.isConnected) {
+      pipStrip = d.createElement("div");
+      pipStrip.id = "we-pip-strip";
+      d.body.appendChild(pipStrip);
+      pipStripKey = "";
+    }
+    pipStrip.style.background = findBackground(side, pipWin);
+
+    const rows = getChatRows(pipAppRoot);
+    const infos = rows.map(rowInfo);
+    // Conversa aberta = linha marcada como selecionada pelo WhatsApp
+    const currentRow = rows.find(isSelectedRow);
+    const current = currentRow ? rowInfo(currentRow).name : "";
+
+    // Só redesenha se algo mudou
+    const key =
+      current + "\n" + infos.map((i) => i.name + "|" + i.img + "|" + i.unread).join("\n");
+    if (key === pipStripKey) return;
+    pipStripKey = key;
+
+    const items = rows.map((row, idx) => {
+      const info = infos[idx];
+      const item = makeAvatarItem(d, info);
+      item.title = info.name;
+      if (info.name && info.name === current) item.classList.add("we-current");
+      item.addEventListener("click", () => pipSwitchChat(row, info.name));
+      return item;
+    });
+    pipStrip.replaceChildren(...items);
+  }
+
+  // O campo de digitar do WhatsApp quebra se for criado dentro da janela
+  // flutuante. Então a troca de conversa acontece na aba: o WhatsApp volta
+  // para lá por um instante, abre a conversa e é levado de novo para a janela.
+  // Leva o WhatsApp de volta para a aba, roda fn() lá e traz para a janela.
+  // O aviso "Trazer de volta" continua por cima da aba durante isso.
+  let pipBusy = false;
+  async function pipInTab(fn) {
+    if (!pipWin || !pipAppRoot || !pipPlaceholder || pipBusy) return undefined;
+    pipBusy = true;
+    try {
+      document.body.insertBefore(pipAppRoot, pipPlaceholder);
+      return await fn();
+    } finally {
+      if (pipWin && pipAppRoot) {
+        const body = pipWin.document.body;
+        body.insertBefore(pipAppRoot, body.firstChild);
+        pipOnlyChat();
+      }
+      pipBusy = false;
+    }
+  }
+
+  async function pipSwitchChat(row, name) {
+    const before = pipAppRoot && pipAppRoot.querySelector("#main");
+    await pipInTab(async () => {
+      openChat(row, name, pipAppRoot);
+      // Espera a conversa nova abrir com o campo de digitar (até 3 s)
+      for (let i = 0; i < 30; i++) {
+        await pipSleep(100);
+        const main = pipAppRoot.querySelector("#main");
+        const box = main && main.querySelector('footer [contenteditable="true"]');
+        if (box && main !== before) break;
+        if (box && isSelectedRow(row) && rowInfo(row).name === name) break;
+      }
+      // O WhatsApp põe o cursor na barra logo depois de abrir a conversa;
+      // se isso acontecer já dentro da janela, o editor quebra. Espera
+      // assentar e tira o foco antes de levar de volta.
+      await pipSleep(400);
+      pipBlurComposer();
+    });
+  }
+
+  function pipBlurComposer() {
+    const active = document.activeElement;
+    if (active && pipAppRoot && pipAppRoot.contains(active)) active.blur();
+    const sel = window.getSelection();
+    if (sel && pipAppRoot && sel.anchorNode && pipAppRoot.contains(sel.anchorNode)) {
+      sel.removeAllRanges();
+    }
+  }
+
+  // Barra de digitar da janela flutuante: envia pela barra original, na aba
+  function buildPipBar(doc) {
+    const bar = doc.createElement("form");
+    bar.id = "we-pip-bar";
+    bar.innerHTML = `
+      <textarea rows="1" placeholder="Digite uma mensagem"></textarea>
+      <button type="submit" title="Enviar">➤</button>`;
+    const input = bar.querySelector("textarea");
+    const btn = bar.querySelector("button");
+
+    // Altura da barra acompanha o texto; a conversa sobe junto
+    const autosize = () => {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 120) + "px";
+      doc.documentElement.style.setProperty("--we-bar-h", bar.offsetHeight + "px");
+    };
+    input.addEventListener("input", () => {
+      input.classList.remove("we-error");
+      autosize();
+    });
+
+    // Enter envia; Shift+Enter quebra a linha
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        bar.requestSubmit();
+      }
+    });
+
+    bar.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text || btn.disabled) return;
+      btn.disabled = true;
+      const ok = await pipInTab(async () => {
+        const sent = await sendViaWhatsApp(text);
+        pipBlurComposer();
+        return sent;
+      });
+      btn.disabled = false;
+      if (ok) {
+        input.value = "";
+      } else {
+        input.classList.add("we-error");
+        input.title = "Não consegui enviar. O texto ficou no campo.";
+      }
+      autosize();
+      input.focus();
+    });
+
+    doc.body.appendChild(bar);
+    autosize();
+    input.focus();
   }
 
   // ---- Modo leve: cópia ao vivo da conversa + campo de resposta ---------
@@ -877,8 +1100,10 @@
     if (pipObserver) pipObserver.disconnect();
     if (pipAppRoot) {
       pipAppRoot
-        .querySelectorAll(".we-pip-hide, .we-pip-main")
-        .forEach((el) => el.classList.remove("we-pip-hide", "we-pip-main"));
+        .querySelectorAll(".we-pip-hide, .we-pip-main, .we-pip-offscreen, .we-pip-layout")
+        .forEach((el) =>
+          el.classList.remove("we-pip-hide", "we-pip-main", "we-pip-offscreen", "we-pip-layout")
+        );
     }
     if (pipAppRoot && pipPlaceholder) {
       pipPlaceholder.replaceWith(pipAppRoot);
@@ -886,6 +1111,8 @@
     if (pipPlaceholder) pipPlaceholder.remove();
     pipAppRoot = null;
     pipPlaceholder = null;
+    pipStrip = null;
+    pipStripKey = "";
     if (pipHeadObserver) pipHeadObserver.disconnect();
     pipHeadObserver = null;
 
@@ -1044,18 +1271,22 @@
         main.querySelector('[contenteditable="true"][role="textbox"]'));
     if (!box) return false;
 
-    // Cursor no fim do campo
+    // Seleciona tudo: o texto novo substitui algum rascunho que esteja lá
     box.focus();
     const sel = window.getSelection();
     const range = document.createRange();
     range.selectNodeContents(box);
-    range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
 
     const probe = text.slice(0, 20);
-    let inserted = document.execCommand("insertText", false, text);
-    if (!inserted || !box.textContent.includes(probe)) {
+    document.execCommand("insertText", false, text);
+    // O editor do WhatsApp atualiza o campo um instante depois; conferir
+    // na hora dava falso negativo e o plano B colava o texto de novo
+    for (let i = 0; i < 5 && !box.textContent.includes(probe); i++) {
+      await pipSleep(60);
+    }
+    if (!box.textContent.includes(probe)) {
       // Plano B: simula colar o texto
       const dt = new DataTransfer();
       dt.setData("text/plain", text);
