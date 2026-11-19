@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Whats Edit",
+  "version": "0.1.0",
+  "description": "Botão de ferramentas para o WhatsApp Web (ex.: esconder a lista de conversas).",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

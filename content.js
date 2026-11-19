@@ -1,0 +1,252 @@
+(() => {
+  "use strict";
+
+  const state = {
+    sidebarHidden: false,
+    fabPos: null, // { right, bottom } salvo após arrastar
+  };
+
+  // ---------------------------------------------------------------------------
+  // Armazenamento
+  // ---------------------------------------------------------------------------
+  function loadState() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(["sidebarHidden", "fabPos"], (data) => {
+        state.sidebarHidden = !!data.sidebarHidden;
+        state.fabPos = data.fabPos || null;
+        resolve();
+      });
+    });
+  }
+
+  function saveState() {
+    chrome.storage.local.set({
+      sidebarHidden: state.sidebarHidden,
+      fabPos: state.fabPos,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ação: esconder/mostrar a lateral de conversas
+  // ---------------------------------------------------------------------------
+
+  // Encontra a coluna esquerda inteira a partir de #side, subindo na árvore
+  // até o ponto em que o elemento pai fica bem mais largo que a coluna
+  // (ou seja, o pai também contém o painel da conversa).
+  function findSidebarColumn() {
+    const side = document.getElementById("side");
+    if (!side) return null;
+
+    let el = side;
+    while (el.parentElement && el.parentElement !== document.body) {
+      const parent = el.parentElement;
+      const w = el.getBoundingClientRect().width;
+      const pw = parent.getBoundingClientRect().width;
+      if (pw - w > 100) return el;
+      el = parent;
+    }
+    return null;
+  }
+
+  let hiddenEl = null;
+
+  function applySidebar() {
+    if (state.sidebarHidden) {
+      // Se já está escondida e ainda no DOM, nada a fazer
+      if (hiddenEl && hiddenEl.isConnected) return;
+
+      const col = findSidebarColumn();
+      if (!col) return;
+      hiddenEl = col;
+      col.classList.add("we-hidden-sidebar");
+
+      // Faz os irmãos (painel da conversa) ocuparem o espaço livre
+      for (const sib of col.parentElement.children) {
+        if (sib !== col) sib.classList.add("we-expand");
+      }
+      const parent = col.parentElement;
+      if (getComputedStyle(parent).display.includes("grid")) {
+        parent.dataset.weGridCols = parent.style.gridTemplateColumns || "";
+        parent.style.gridTemplateColumns = "1fr";
+      }
+    } else {
+      document
+        .querySelectorAll(".we-hidden-sidebar")
+        .forEach((el) => el.classList.remove("we-hidden-sidebar"));
+      document
+        .querySelectorAll(".we-expand")
+        .forEach((el) => el.classList.remove("we-expand"));
+      document.querySelectorAll("[data-we-grid-cols]").forEach((el) => {
+        el.style.gridTemplateColumns = el.dataset.weGridCols;
+        delete el.dataset.weGridCols;
+      });
+      hiddenEl = null;
+    }
+    updateMenuLabels();
+  }
+
+  function toggleSidebar() {
+    state.sidebarHidden = !state.sidebarHidden;
+    saveState();
+    applySidebar();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lista de ações do menu (adicione novas aqui)
+  // ---------------------------------------------------------------------------
+  const actions = [
+    {
+      id: "toggle-sidebar",
+      label: () =>
+        state.sidebarHidden ? "Mostrar conversas" : "Esconder conversas",
+      shortcut: "Alt+S",
+      run: toggleSidebar,
+    },
+  ];
+
+  // ---------------------------------------------------------------------------
+  // UI: botão flutuante + menu
+  // ---------------------------------------------------------------------------
+  let root, fab, menu;
+
+  function buildUI() {
+    root = document.createElement("div");
+    root.id = "we-root";
+
+    menu = document.createElement("div");
+    menu.id = "we-menu";
+
+    for (const action of actions) {
+      const btn = document.createElement("button");
+      btn.className = "we-item";
+      btn.dataset.action = action.id;
+      btn.innerHTML = `<span class="we-label"></span><span class="we-kbd">${action.shortcut || ""}</span>`;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        action.run();
+        closeMenu();
+      });
+      menu.appendChild(btn);
+    }
+
+    fab = document.createElement("button");
+    fab.id = "we-fab";
+    fab.title = "Whats Edit";
+    fab.textContent = "⚙";
+
+    root.appendChild(menu);
+    root.appendChild(fab);
+    document.body.appendChild(root);
+
+    if (state.fabPos) {
+      root.style.right = state.fabPos.right + "px";
+      root.style.bottom = state.fabPos.bottom + "px";
+    }
+
+    setupDrag();
+    updateMenuLabels();
+
+    document.addEventListener("click", (e) => {
+      if (!root.contains(e.target)) closeMenu();
+    });
+  }
+
+  function updateMenuLabels() {
+    if (!menu) return;
+    for (const action of actions) {
+      const el = menu.querySelector(`[data-action="${action.id}"] .we-label`);
+      if (el) el.textContent = action.label();
+    }
+  }
+
+  function toggleMenu() {
+    const rect = root.getBoundingClientRect();
+    root.classList.toggle("we-menu-down", rect.top < window.innerHeight / 2);
+    root.classList.toggle("we-open");
+  }
+
+  function closeMenu() {
+    root.classList.remove("we-open");
+  }
+
+  // Arrastar o botão; um clique sem movimento abre o menu
+  function setupDrag() {
+    let startX, startY, startRight, startBottom, moved;
+
+    fab.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      fab.setPointerCapture(e.pointerId);
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = root.getBoundingClientRect();
+      startRight = window.innerWidth - rect.right;
+      startBottom = window.innerHeight - rect.bottom;
+      moved = false;
+    });
+
+    fab.addEventListener("pointermove", (e) => {
+      if (startX === undefined) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) < 5) return;
+      moved = true;
+      closeMenu();
+      const right = clamp(startRight - dx, 0, window.innerWidth - 44);
+      const bottom = clamp(startBottom - dy, 0, window.innerHeight - 44);
+      root.style.right = right + "px";
+      root.style.bottom = bottom + "px";
+    });
+
+    fab.addEventListener("pointerup", () => {
+      if (startX === undefined) return;
+      startX = undefined;
+      if (moved) {
+        state.fabPos = {
+          right: parseInt(root.style.right, 10),
+          bottom: parseInt(root.style.bottom, 10),
+        };
+        saveState();
+      } else {
+        toggleMenu();
+      }
+    });
+  }
+
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Atalhos de teclado
+  // ---------------------------------------------------------------------------
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyS") {
+        e.preventDefault();
+        toggleSidebar();
+      }
+    },
+    true
+  );
+
+  // ---------------------------------------------------------------------------
+  // Inicialização
+  // ---------------------------------------------------------------------------
+  async function init() {
+    await loadState();
+    buildUI();
+
+    // O WhatsApp recria partes da página com frequência; reaplica quando preciso
+    const observer = new MutationObserver(() => {
+      if (state.sidebarHidden && !(hiddenEl && hiddenEl.isConnected)) {
+        applySidebar();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    applySidebar();
+  }
+
+  init();
+})();
