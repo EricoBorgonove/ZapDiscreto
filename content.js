@@ -166,13 +166,6 @@
       if (floatOpen) scheduleClose();
     });
 
-    // Escolheu uma conversa -> fecha
-    document.addEventListener("click", (e) => {
-      if (!floatOpen || !hiddenEl) return;
-      const pane = document.getElementById("pane-side");
-      if (pane && pane.contains(e.target)) scheduleClose(150);
-    });
-
     // Clique fora da lateral -> fecha
     document.addEventListener("mousedown", (e) => {
       if (!floatOpen || !hiddenEl) return;
