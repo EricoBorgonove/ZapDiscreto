@@ -23,6 +23,11 @@
   border-right: 1px solid rgba(134, 150, 160, 0.15);
 }
 
+/* Lista completa aberta por cima: a faixa sai da frente */
+#we-strip.we-strip-off {
+  display: none;
+}
+
 .we-av-item {
   position: relative;
   flex: 0 0 48px;

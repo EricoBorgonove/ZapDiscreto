@@ -229,11 +229,16 @@
     hiddenEl.style.background = findBackground(hiddenEl);
     hiddenEl.classList.add("we-float");
     floatOpen = true;
+
+    // Modo só fotos: a lista completa ocupa o lugar da faixa de fotos
+    hideCard();
+    if (strip) strip.classList.add("we-strip-off");
   }
 
   function closeFloat() {
     clearTimeout(closeTimer);
     floatOpen = false;
+    if (strip) strip.classList.remove("we-strip-off");
     document.querySelectorAll(".we-float").forEach((el) => {
       el.classList.remove("we-float");
       el.style.removeProperty("--we-left");
