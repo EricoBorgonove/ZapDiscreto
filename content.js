@@ -594,6 +594,7 @@
       panicActive = true;
       closeFloat();
       hideCard();
+      if (pipWin) pipWin.close();
       if (state.panic.blur) state.blur = true;
       if (state.panic.hide) {
         state.sidebarMode = "hidden";
@@ -651,6 +652,299 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Janela flutuante (Document Picture-in-Picture, como o Meet): mostra uma
+  // cópia ao vivo da conversa aberta numa janelinha sempre por cima, com um
+  // campo para responder que escreve no WhatsApp e envia.
+  // ---------------------------------------------------------------------------
+  const PIP_ROWS = 40; // quantas mensagens recentes mostrar
+  let pipWin = null;
+  let pipObserver = null;
+  let pipTimer = null;
+  let pipSig = "";
+
+  const PIP_CSS = `
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    #we-pip { display: flex; flex-direction: column; height: 100vh;
+      font-family: Segoe UI, Helvetica, Arial, sans-serif; }
+    #we-pip-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; background: rgba(0,0,0,.3); color: #e9edef;
+      font-size: 14px; font-weight: 600; }
+    #we-pip-head img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+    #we-pip-head img:not([src]), #we-pip-head img[src=""] { display: none; }
+    #we-pip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #we-pip-msgs { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 6px 0; }
+    #we-pip-empty { color: #8696a0; text-align: center; padding: 40px 16px; font-size: 13px; }
+    #we-pip-form { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
+      padding: 8px; background: rgba(0,0,0,.3); }
+    #we-pip-input { flex: 1; resize: none; border: none; outline: none; border-radius: 8px;
+      padding: 9px 12px; max-height: 110px; background: #2a3942; color: #e9edef;
+      font: 14px Segoe UI, Helvetica, Arial, sans-serif; }
+    #we-pip-send { flex: 0 0 38px; height: 38px; border: none; border-radius: 50%;
+      background: #00a884; color: #fff; font-size: 16px; cursor: pointer; }
+    #we-pip-send:disabled { opacity: .5; cursor: default; }
+    #we-pip-status { min-height: 14px; padding: 0 12px 4px; font-size: 11px; color: #8696a0;
+      background: rgba(0,0,0,.3); }
+  `;
+
+  async function togglePip() {
+    if (pipWin) {
+      pipWin.close();
+      return;
+    }
+    if (!("documentPictureInPicture" in window)) {
+      alert("Seu Chrome não suporta janela flutuante (precisa do Chrome 116 ou mais novo).");
+      return;
+    }
+    if (!document.getElementById("main")) {
+      alert("Abra uma conversa primeiro.");
+      return;
+    }
+    try {
+      pipWin = await documentPictureInPicture.requestWindow({ width: 400, height: 560 });
+    } catch (err) {
+      console.warn("[Whats Edit] não foi possível abrir a janela flutuante:", err);
+      pipWin = null;
+      return;
+    }
+
+    setupPipDocument(pipWin.document);
+    pipWin.addEventListener("pagehide", cleanupPip);
+
+    // Qualquer mudança na página pode ser mensagem nova ou troca de conversa
+    pipObserver = new MutationObserver(schedulePipRender);
+    pipObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    renderPip(true);
+    updateMenuLabels();
+  }
+
+  function cleanupPip() {
+    if (pipObserver) pipObserver.disconnect();
+    pipObserver = null;
+    pipWin = null;
+    pipSig = "";
+    updateMenuLabels();
+  }
+
+  // Timers da página ficam lentos com a aba em segundo plano; os da janela
+  // flutuante (que está visível) não, então usamos os dela.
+  let pipLastRender = 0;
+  function schedulePipRender() {
+    if (!pipWin) return;
+    pipWin.clearTimeout(pipTimer);
+    // Se a página não para de mudar, atualiza pelo menos 1x por segundo
+    const wait = Date.now() - pipLastRender > 1000 ? 0 : 200;
+    pipTimer = pipWin.setTimeout(() => {
+      pipLastRender = Date.now();
+      renderPip(false);
+    }, wait);
+  }
+
+  function pipSleep(ms) {
+    return new Promise((r) => (pipWin || window).setTimeout(r, ms));
+  }
+
+  function setupPipDocument(doc) {
+    // Mesmos estilos e tema do WhatsApp, para as mensagens copiadas
+    for (const node of document.querySelectorAll('link[rel="stylesheet"], style')) {
+      const copy = node.cloneNode(true);
+      if (copy.tagName === "LINK") copy.href = node.href;
+      doc.head.appendChild(copy);
+    }
+    for (const attr of document.documentElement.attributes) {
+      if (attr.name !== "style") doc.documentElement.setAttribute(attr.name, attr.value);
+    }
+    for (const attr of document.body.attributes) {
+      if (attr.name !== "style") doc.body.setAttribute(attr.name, attr.value);
+    }
+    const style = doc.createElement("style");
+    style.textContent = PIP_CSS;
+    doc.head.appendChild(style);
+    doc.title = "WhatsApp";
+
+    doc.body.innerHTML = `
+      <div id="we-pip">
+        <div id="we-pip-head"><img id="we-pip-avatar" alt=""><span id="we-pip-name"></span></div>
+        <div id="we-pip-msgs"></div>
+        <form id="we-pip-form">
+          <textarea id="we-pip-input" rows="1" placeholder="Digite uma mensagem"></textarea>
+          <button id="we-pip-send" type="submit" title="Enviar">➤</button>
+        </form>
+        <div id="we-pip-status"></div>
+      </div>`;
+
+    const form = doc.getElementById("we-pip-form");
+    const input = doc.getElementById("we-pip-input");
+    const send = doc.getElementById("we-pip-send");
+    const status = doc.getElementById("we-pip-status");
+
+    const autosize = () => {
+      input.style.height = "auto";
+      input.style.height = input.scrollHeight + "px";
+    };
+    input.addEventListener("input", autosize);
+
+    // Enter envia; Shift+Enter quebra a linha
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      send.disabled = true;
+      status.textContent = "Enviando...";
+      const ok = await sendViaWhatsApp(text);
+      send.disabled = false;
+      if (ok) {
+        input.value = "";
+        autosize();
+        status.textContent = "";
+      } else {
+        status.textContent = "Não consegui enviar. O texto ficou no campo.";
+      }
+      input.focus();
+    });
+  }
+
+  function renderPip(force) {
+    if (!pipWin) return;
+    const d = pipWin.document;
+    const msgs = d.getElementById("we-pip-msgs");
+    const nameEl = d.getElementById("we-pip-name");
+    const avatar = d.getElementById("we-pip-avatar");
+    if (!msgs) return;
+
+    const main = document.getElementById("main");
+    if (!main) {
+      if (pipSig !== "none") {
+        pipSig = "none";
+        nameEl.textContent = "";
+        avatar.removeAttribute("src");
+        msgs.innerHTML = '<div id="we-pip-empty">Nenhuma conversa aberta no WhatsApp</div>';
+      }
+      return;
+    }
+
+    const header = main.querySelector("header");
+    const titleEl = header && header.querySelector("span[title]");
+    const name = titleEl
+      ? titleEl.title
+      : header
+      ? header.innerText.split("\n")[0]
+      : "";
+    const rows = [...main.querySelectorAll('[role="row"]')];
+    const last = rows.slice(-PIP_ROWS);
+    const tail = last.length ? last[last.length - 1].textContent : "";
+    const sig = `${name}|${rows.length}|${tail.length}|${tail.slice(-60)}`;
+    if (!force && sig === pipSig) return;
+    const chatChanged = !pipSig.startsWith(name + "|");
+    pipSig = sig;
+
+    nameEl.textContent = name;
+    const headImg = header && header.querySelector("img");
+    if (headImg && headImg.src) avatar.src = headImg.src;
+    else avatar.removeAttribute("src");
+
+    const atBottom =
+      msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
+
+    if (!last.length) {
+      msgs.innerHTML = '<div id="we-pip-empty">Sem mensagens carregadas</div>';
+      return;
+    }
+
+    // Copia o contêiner das mensagens (sem filhos) e as últimas mensagens
+    const wrap = last[0].parentElement.cloneNode(false);
+    wrap.removeAttribute("id");
+    for (const row of last) {
+      const copy = row.cloneNode(true);
+      copy.removeAttribute("id");
+      copy.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"));
+      copy.querySelectorAll("a[href]").forEach((a) => (a.target = "_blank"));
+      wrap.appendChild(copy);
+    }
+    msgs.replaceChildren(wrap);
+    d.body.style.background = findBackground(last[0]);
+
+    if (force || chatChanged || atBottom) msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  // Escreve no campo de mensagem do WhatsApp e envia
+  async function sendViaWhatsApp(text) {
+    const main = document.getElementById("main");
+    const box =
+      main &&
+      (main.querySelector('footer [contenteditable="true"]') ||
+        main.querySelector('[contenteditable="true"][role="textbox"]'));
+    if (!box) return false;
+
+    // Cursor no fim do campo
+    box.focus();
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(box);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    const probe = text.slice(0, 20);
+    let inserted = document.execCommand("insertText", false, text);
+    if (!inserted || !box.textContent.includes(probe)) {
+      // Plano B: simula colar o texto
+      const dt = new DataTransfer();
+      dt.setData("text/plain", text);
+      box.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true })
+      );
+    }
+    await pipSleep(150);
+    if (!box.textContent.includes(probe)) return false;
+
+    const icon = main.querySelector(
+      'button[aria-label="Enviar"], button[aria-label="Send"], ' +
+        '[data-icon="send"], [data-icon="wds-ic-send-filled"]'
+    );
+    const sendBtn = icon && (icon.closest('button, [role="button"]') || icon);
+    if (sendBtn) {
+      sendBtn.click();
+    } else {
+      box.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter", code: "Enter", keyCode: 13, which: 13,
+          bubbles: true, cancelable: true,
+        })
+      );
+    }
+
+    // Enviou se o campo do WhatsApp esvaziou
+    for (let i = 0; i < 10; i++) {
+      await pipSleep(100);
+      if (!box.isConnected || !box.textContent.trim()) return true;
+    }
+    return false;
+  }
+
+  // Tentativa de abrir sozinha ao trocar de aba (o Chrome só permite isso
+  // em alguns sites; se não permitir, nada acontece)
+  function setupAutoPip() {
+    try {
+      navigator.mediaSession.setActionHandler("enterpictureinpicture", () => {
+        if (!pipWin && !panicActive && document.getElementById("main")) togglePip();
+      });
+    } catch (err) {
+      console.debug("[Whats Edit] abertura automática indisponível:", err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Lista de ações do menu (adicione novas aqui)
   // ---------------------------------------------------------------------------
   const actions = [
@@ -682,6 +976,13 @@
       shortcut: "Alt+B",
       key: "KeyB",
       run: toggleBlur,
+    },
+    {
+      id: "pip",
+      label: () => (pipWin ? "Fechar janela flutuante" : "Janela flutuante"),
+      shortcut: "Alt+J",
+      key: "KeyJ",
+      run: togglePip,
     },
   ];
 
@@ -957,6 +1258,7 @@
     await loadState();
     buildUI();
     setupSidebarEvents();
+    setupAutoPip();
 
     // O WhatsApp recria partes da página com frequência; reaplica quando preciso
     // Elementos da própria extensão não devem disparar o observador

@@ -19,6 +19,7 @@ Depois de editar algum arquivo, clique em ↻ na extensão em `chrome://extensio
 | Só fotos (hover mostra os dados da conversa) | Alt+A |
 | Desfocar textos (aparecem ao passar o mouse) | Alt+B |
 | Pânico (botão amarelo ⚠): desfoca/esconde/cobre na hora | Alt+P |
+| Janela flutuante da conversa aberta (fica por cima de tudo, com resposta) | Alt+J |
 
 O que o pânico faz, e se o botão amarelo aparece, se configura no menu ⚙ → **Botão de pânico ›**.
 
