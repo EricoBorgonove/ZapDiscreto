@@ -160,7 +160,66 @@ html.we-blur #pane-side [role="row"]:hover {
   right: 24px;
   bottom: 96px;
   z-index: 99999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-family: Segoe UI, Helvetica, Arial, sans-serif;
+}
+
+/* ---------- Botão de pânico ---------- */
+#we-panic {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: #f5c518;
+  color: #3a2c00;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.15s, background 0.15s;
+}
+
+#we-panic[hidden] {
+  display: none;
+}
+
+#we-panic:hover {
+  background: #e0b000;
+  transform: scale(1.06);
+}
+
+/* Pânico ligado: anel pulsando para lembrar que está ativo */
+#we-panic.we-active {
+  animation: we-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes we-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 197, 24, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(245, 197, 24, 0);
+  }
+}
+
+/* Tela de cobertura (opção "cobrir a tela inteira") */
+#we-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 99998;
+  background: #111b21;
+  color: rgba(233, 237, 239, 0.35);
+  font: 13px Segoe UI, Helvetica, Arial, sans-serif;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 24px;
+  box-sizing: border-box;
 }
 
 #we-fab {
@@ -234,6 +293,45 @@ html.we-blur #pane-side [role="row"]:hover {
 .we-kbd {
   font-size: 11px;
   opacity: 0.6;
+}
+
+.we-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.we-back {
+  font-weight: 600;
+}
+
+.we-sep {
+  margin: 4px 0;
+  padding: 6px 16px 2px;
+  border-top: 1px solid rgba(134, 150, 160, 0.2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+}
+
+.we-check {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 2px solid rgba(134, 150, 160, 0.7);
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.we-check.we-on {
+  background: #00a884;
+  border-color: #00a884;
+  color: #fff;
 }
 
 @media (prefers-color-scheme: dark) {

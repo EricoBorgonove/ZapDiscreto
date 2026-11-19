@@ -5,7 +5,13 @@
     sidebarMode: "visible", // "visible" | "hidden" | "avatars"
     blur: false,
     fabPos: null, // { right, bottom } salvo após arrastar
+    // Botão de pânico: se aparece e o que ele faz
+    panic: { enabled: true, blur: true, hide: true, cover: false },
   };
+
+  // Pânico ativo não é salvo: guarda o estado anterior para restaurar
+  let panicActive = false;
+  let panicPrev = null;
 
   const isHidden = () => state.sidebarMode === "hidden";
   const isAvatars = () => state.sidebarMode === "avatars";
@@ -18,8 +24,9 @@
   function loadState() {
     return new Promise((resolve) => {
       chrome.storage.local.get(
-        ["sidebarMode", "sidebarHidden", "blur", "fabPos"],
+        ["sidebarMode", "sidebarHidden", "blur", "fabPos", "panic"],
         (data) => {
+          state.panic = { ...state.panic, ...(data.panic || {}) };
           // Compatível com a versão antiga (sidebarHidden: true/false)
           state.sidebarMode =
             data.sidebarMode || (data.sidebarHidden ? "hidden" : "visible");
@@ -32,10 +39,13 @@
   }
 
   function saveState() {
+    // Durante o pânico, salva o estado de antes (o pânico é temporário)
+    const saved = panicActive ? panicPrev : state;
     chrome.storage.local.set({
-      sidebarMode: state.sidebarMode,
-      blur: state.blur,
+      sidebarMode: saved.sidebarMode,
+      blur: saved.blur,
       fabPos: state.fabPos,
+      panic: state.panic,
     });
   }
 
@@ -127,6 +137,7 @@
   }
 
   function setSidebarMode(mode) {
+    if (panicActive) setPanic(false);
     suspended = false;
     state.sidebarMode = mode;
     saveState();
@@ -518,7 +529,7 @@
   function setupSidebarEvents() {
     document.addEventListener("mouseover", (e) => {
       // Lateral flutuante (modo escondida e modo só fotos)
-      if (!colHidden() || !hiddenEl) return;
+      if (panicActive || !colHidden() || !hiddenEl) return;
       const btn = getChatsButton(e.target);
       if (btn) return openFloat(btn);
       if (!floatOpen) return;
@@ -561,15 +572,93 @@
   }
 
   function toggleBlur() {
+    if (panicActive) setPanic(false);
     state.blur = !state.blur;
     saveState();
     applyBlur();
   }
 
   // ---------------------------------------------------------------------------
+  // Botão de pânico: aplica na hora o que estiver configurado
+  // (desfocar, esconder conversas, cobrir a tela) e restaura ao desligar
+  // ---------------------------------------------------------------------------
+  let cover = null;
+
+  function setPanic(on) {
+    if (on === panicActive) return;
+    if (on) {
+      panicPrev = { blur: state.blur, sidebarMode: state.sidebarMode };
+      panicActive = true;
+      closeFloat();
+      hideCard();
+      if (state.panic.blur) state.blur = true;
+      if (state.panic.hide) {
+        state.sidebarMode = "hidden";
+        suspended = false;
+      }
+      if (state.panic.cover) showCover();
+    } else {
+      panicActive = false;
+      state.blur = panicPrev.blur;
+      state.sidebarMode = panicPrev.sidebarMode;
+      panicPrev = null;
+      hideCover();
+    }
+    applyBlur();
+    applySidebar();
+    updatePanicButton();
+  }
+
+  function togglePanic() {
+    if (!state.panic.enabled && !panicActive) return;
+    setPanic(!panicActive);
+  }
+
+  function showCover() {
+    if (!cover) {
+      cover = document.createElement("div");
+      cover.id = "we-cover";
+      cover.textContent = "Clique no botão amarelo ou aperte Alt+P para voltar";
+    }
+    document.body.appendChild(cover);
+  }
+
+  function hideCover() {
+    if (cover) cover.remove();
+  }
+
+  function updatePanicButton() {
+    if (!panicBtn) return;
+    panicBtn.hidden = !state.panic.enabled && !panicActive;
+    panicBtn.classList.toggle("we-active", panicActive);
+    panicBtn.title = panicActive
+      ? "Sair do modo pânico (Alt+P)"
+      : "Modo pânico (Alt+P)";
+  }
+
+  // Liga/desliga uma opção do pânico e reaplica se ele estiver ativo
+  function togglePanicOption(key) {
+    state.panic[key] = !state.panic[key];
+    saveState();
+    if (panicActive) {
+      setPanic(false);
+      setPanic(true);
+    }
+    updatePanicButton();
+  }
+
+  // ---------------------------------------------------------------------------
   // Lista de ações do menu (adicione novas aqui)
   // ---------------------------------------------------------------------------
   const actions = [
+    {
+      id: "panic",
+      label: () => "Pânico",
+      shortcut: "Alt+P",
+      key: "KeyP",
+      menu: false, // só atalho; no menu fica o submenu de configuração
+      run: togglePanic,
+    },
     {
       id: "toggle-sidebar",
       label: () => (isHidden() ? "Mostrar conversas" : "Esconder conversas"),
@@ -596,7 +685,85 @@
   // ---------------------------------------------------------------------------
   // UI: botão flutuante + menu
   // ---------------------------------------------------------------------------
-  let root, fab, menu;
+  let root, fab, menu, panicBtn;
+  let menuView = "main"; // "main" | "panic"
+
+  const PANIC_ICON = `
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path d="M12 3.5 21.5 20h-19z" fill="none" stroke="currentColor"
+            stroke-width="2.2" stroke-linejoin="round"/>
+      <path d="M12 10v4.2" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round"/>
+      <circle cx="12" cy="17" r="1.3" fill="currentColor"/>
+    </svg>`;
+
+  // Itens de cada tela do menu
+  function menuItems() {
+    if (menuView === "panic") {
+      const check = (key, label) => ({
+        label,
+        checked: state.panic[key],
+        keepOpen: true,
+        run: () => togglePanicOption(key),
+      });
+      return [
+        { label: "‹ Botão de pânico", back: true, keepOpen: true,
+          run: () => (menuView = "main") },
+        check("enabled", "Mostrar botão de pânico"),
+        { separator: "Ao ativar o pânico" },
+        check("blur", "Desfocar textos"),
+        check("hide", "Esconder conversas"),
+        check("cover", "Cobrir a tela inteira"),
+      ];
+    }
+    return [
+      ...actions
+        .filter((a) => a.menu !== false)
+        .map((a) => ({ label: a.label(), shortcut: a.shortcut, run: a.run })),
+      { separator: "" },
+      { label: "Botão de pânico", submenu: true, keepOpen: true,
+        run: () => (menuView = "panic") },
+    ];
+  }
+
+  function renderMenu() {
+    if (!menu) return;
+    const els = menuItems().map((item) => {
+      if ("separator" in item) {
+        const sep = document.createElement("div");
+        sep.className = "we-sep";
+        sep.textContent = item.separator;
+        return sep;
+      }
+      const btn = document.createElement("button");
+      btn.className = "we-item" + (item.back ? " we-back" : "");
+
+      const label = document.createElement("span");
+      label.className = "we-label";
+      if ("checked" in item) {
+        const box = document.createElement("span");
+        box.className = "we-check" + (item.checked ? " we-on" : "");
+        box.textContent = item.checked ? "✓" : "";
+        label.appendChild(box);
+      }
+      label.appendChild(document.createTextNode(item.label));
+      btn.appendChild(label);
+
+      const right = document.createElement("span");
+      right.className = "we-kbd";
+      right.textContent = item.submenu ? "›" : item.shortcut || "";
+      btn.appendChild(right);
+
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        item.run();
+        if (item.keepOpen) renderMenu();
+        else closeMenu();
+      });
+      return btn;
+    });
+    menu.replaceChildren(...els);
+  }
 
   function buildUI() {
     root = document.createElement("div");
@@ -605,18 +772,13 @@
     menu = document.createElement("div");
     menu.id = "we-menu";
 
-    for (const action of actions) {
-      const btn = document.createElement("button");
-      btn.className = "we-item";
-      btn.dataset.action = action.id;
-      btn.innerHTML = `<span class="we-label"></span><span class="we-kbd">${action.shortcut || ""}</span>`;
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        action.run();
-        closeMenu();
-      });
-      menu.appendChild(btn);
-    }
+    panicBtn = document.createElement("button");
+    panicBtn.id = "we-panic";
+    panicBtn.innerHTML = PANIC_ICON;
+    panicBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      togglePanic();
+    });
 
     fab = document.createElement("button");
     fab.id = "we-fab";
@@ -624,8 +786,10 @@
     fab.textContent = "⚙";
 
     root.appendChild(menu);
+    root.appendChild(panicBtn);
     root.appendChild(fab);
     document.body.appendChild(root);
+    updatePanicButton();
 
     if (state.fabPos) {
       root.style.right = state.fabPos.right + "px";
@@ -641,21 +805,20 @@
   }
 
   function updateMenuLabels() {
-    if (!menu) return;
-    for (const action of actions) {
-      const el = menu.querySelector(`[data-action="${action.id}"] .we-label`);
-      if (el) el.textContent = action.label();
-    }
+    renderMenu();
   }
 
   function toggleMenu() {
     const rect = root.getBoundingClientRect();
     root.classList.toggle("we-menu-down", rect.top < window.innerHeight / 2);
+    menuView = "main";
+    renderMenu();
     root.classList.toggle("we-open");
   }
 
   function closeMenu() {
     root.classList.remove("we-open");
+    menuView = "main";
   }
 
   // Arrastar o botão; um clique sem movimento abre o menu
@@ -680,8 +843,8 @@
       if (!moved && Math.hypot(dx, dy) < 5) return;
       moved = true;
       closeMenu();
-      const right = clamp(startRight - dx, 0, window.innerWidth - 44);
-      const bottom = clamp(startBottom - dy, 0, window.innerHeight - 44);
+      const right = clamp(startRight - dx, 0, window.innerWidth - root.offsetWidth);
+      const bottom = clamp(startBottom - dy, 0, window.innerHeight - root.offsetHeight);
       root.style.right = right + "px";
       root.style.bottom = bottom + "px";
     });
@@ -729,7 +892,9 @@
     // Elementos da própria extensão não devem disparar o observador
     const isOurs = (node) => {
       const el = node.nodeType === 1 ? node : node.parentElement;
-      return !!(el && el.closest && el.closest("#we-root, #we-strip, #we-card"));
+      return !!(
+        el && el.closest && el.closest("#we-root, #we-strip, #we-card, #we-cover")
+      );
     };
 
     let fixTimer = null;
