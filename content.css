@@ -15,6 +15,11 @@
   visibility: hidden !important;
 }
 
+.we-divider-noborder {
+  border-left: none !important;
+  border-right: none !important;
+}
+
 /* Lateral aberta como painel flutuante (hover no botão de Conversas) */
 .we-hidden-sidebar.we-float {
   display: flex !important;

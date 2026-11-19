@@ -52,6 +52,7 @@
   }
 
   let hiddenEl = null;
+  let hiddenEdge = null; // posição x onde a lista terminava
 
   function applySidebar() {
     if (state.sidebarHidden) {
@@ -62,6 +63,8 @@
       const col = findSidebarColumn();
       if (!col) return;
       hiddenEl = col;
+      // Guarda onde a lista terminava (bordas soltas ficam nessa posição)
+      hiddenEdge = col.getBoundingClientRect().right;
       // Só esconde a coluna: o painel da conversa já tem flex-grow
       // e ocupa o espaço livre sozinho.
       col.classList.add("we-hidden-sidebar");
@@ -76,8 +79,10 @@
     } else {
       closeFloat();
       document
-        .querySelectorAll(".we-divider-hidden")
-        .forEach((el) => el.classList.remove("we-divider-hidden"));
+        .querySelectorAll(".we-divider-hidden, .we-divider-noborder")
+        .forEach((el) =>
+          el.classList.remove("we-divider-hidden", "we-divider-noborder")
+        );
       document
         .querySelectorAll(".we-no-border")
         .forEach((el) => el.classList.remove("we-no-border"));
@@ -193,13 +198,15 @@
     });
   }
 
-  // Esconde divisórias soltas (elementos finos e altos, ex.: alça de
-  // redimensionar a lista) que ficam sobrando no meio da tela.
+  // Esconde divisórias soltas que ficam no meio da tela onde a lista
+  // terminava: elementos finos e altos, ou caixas com borda nessa posição
+  // (ex.: camadas de painéis do WhatsApp que ficam por cima da lista).
   function hideDividers() {
     if (!state.sidebarHidden || !hiddenEl || !hiddenEl.isConnected) return;
     const root = hiddenEl.parentElement;
     const main = document.getElementById("main");
     const minHeight = window.innerHeight * 0.4;
+    const near = (x) => hiddenEdge !== null && Math.abs(x - hiddenEdge) <= 3;
 
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
       acceptNode: (el) =>
@@ -208,8 +215,20 @@
     });
     for (let el = walker.nextNode(); el; el = walker.nextNode()) {
       const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.width <= 6 && r.height > minHeight) {
+      if (r.height < minHeight || r.width === 0) continue;
+
+      if (r.width <= 6 && !el.classList.contains("we-divider-hidden")) {
         el.classList.add("we-divider-hidden");
+        console.debug("[Whats Edit] divisória fina escondida:", el);
+        continue;
+      }
+
+      const cs = getComputedStyle(el);
+      const borderRight = parseFloat(cs.borderRightWidth) > 0 && near(r.right);
+      const borderLeft = parseFloat(cs.borderLeftWidth) > 0 && near(r.left);
+      if ((borderRight || borderLeft) && !el.classList.contains("we-divider-noborder")) {
+        el.classList.add("we-divider-noborder");
+        console.debug("[Whats Edit] borda removida:", el);
       }
     }
   }
