@@ -2,35 +2,43 @@
   "use strict";
 
   const state = {
-    sidebarHidden: false,
+    sidebarMode: "visible", // "visible" | "hidden" | "avatars"
     blur: false,
     fabPos: null, // { right, bottom } salvo após arrastar
   };
+
+  const isHidden = () => state.sidebarMode === "hidden";
+  const isAvatars = () => state.sidebarMode === "avatars";
 
   // ---------------------------------------------------------------------------
   // Armazenamento
   // ---------------------------------------------------------------------------
   function loadState() {
     return new Promise((resolve) => {
-      chrome.storage.local.get(["sidebarHidden", "blur", "fabPos"], (data) => {
-        state.sidebarHidden = !!data.sidebarHidden;
-        state.blur = !!data.blur;
-        state.fabPos = data.fabPos || null;
-        resolve();
-      });
+      chrome.storage.local.get(
+        ["sidebarMode", "sidebarHidden", "blur", "fabPos"],
+        (data) => {
+          // Compatível com a versão antiga (sidebarHidden: true/false)
+          state.sidebarMode =
+            data.sidebarMode || (data.sidebarHidden ? "hidden" : "visible");
+          state.blur = !!data.blur;
+          state.fabPos = data.fabPos || null;
+          resolve();
+        }
+      );
     });
   }
 
   function saveState() {
     chrome.storage.local.set({
-      sidebarHidden: state.sidebarHidden,
+      sidebarMode: state.sidebarMode,
       blur: state.blur,
       fabPos: state.fabPos,
     });
   }
 
   // ---------------------------------------------------------------------------
-  // Ação: esconder/mostrar a lateral de conversas
+  // Utilitários
   // ---------------------------------------------------------------------------
 
   // Encontra a coluna esquerda inteira a partir de #side, subindo na árvore
@@ -51,51 +59,117 @@
     return null;
   }
 
-  let hiddenEl = null;
-  let hiddenEdge = null; // posição x onde a lista terminava
-
-  function applySidebar() {
-    if (state.sidebarHidden) {
-      // Se já está escondida e ainda no DOM, nada a fazer
-      if (hiddenEl && hiddenEl.isConnected) return;
-
-      floatOpen = false;
-      const col = findSidebarColumn();
-      if (!col) return;
-      hiddenEl = col;
-      // Guarda onde a lista terminava (bordas soltas ficam nessa posição)
-      hiddenEdge = col.getBoundingClientRect().right;
-      // Só esconde a coluna: o painel da conversa já tem flex-grow
-      // e ocupa o espaço livre sozinho.
-      col.classList.add("we-hidden-sidebar");
-
-      // Remove a borda que separa a lista da conversa (vira uma linha solta)
-      for (const sib of col.parentElement.children) {
-        if (sib !== col && parseFloat(getComputedStyle(sib).flexGrow) > 0) {
-          sib.classList.add("we-no-border");
-        }
-      }
-      requestAnimationFrame(hideDividers);
-    } else {
-      closeFloat();
-      document
-        .querySelectorAll(".we-divider-hidden, .we-divider-noborder")
-        .forEach((el) =>
-          el.classList.remove("we-divider-hidden", "we-divider-noborder")
-        );
-      document
-        .querySelectorAll(".we-no-border")
-        .forEach((el) => el.classList.remove("we-no-border"));
-      document
-        .querySelectorAll(".we-hidden-sidebar")
-        .forEach((el) => el.classList.remove("we-hidden-sidebar"));
-      hiddenEl = null;
+  // Primeira cor de fundo não transparente subindo na árvore
+  function findBackground(el) {
+    for (let e = el; e; e = e.parentElement) {
+      const bg = getComputedStyle(e).backgroundColor;
+      if (bg && bg !== "transparent" && !/rgba\(.*,\s*0\)$/.test(bg)) return bg;
     }
-    updateMenuLabels();
+    return "#fff";
+  }
+
+  function removeClasses(...classes) {
+    const sel = classes.map((c) => "." + c).join(",");
+    document
+      .querySelectorAll(sel)
+      .forEach((el) => el.classList.remove(...classes));
+  }
+
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
   }
 
   // ---------------------------------------------------------------------------
-  // Lateral flutuante: hover no botão "Conversas" da barra de ícones
+  // Modo lateral: aplica o modo atual e desfaz os outros
+  // ---------------------------------------------------------------------------
+  function applySidebar() {
+    if (!isHidden()) clearHidden();
+    if (!isAvatars()) clearAvatars();
+    if (isHidden()) applyHidden();
+    else if (isAvatars()) applyAvatars();
+    updateMenuLabels();
+  }
+
+  function setSidebarMode(mode) {
+    state.sidebarMode = mode;
+    saveState();
+    applySidebar();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Modo "escondida": coluna some por completo
+  // ---------------------------------------------------------------------------
+  let hiddenEl = null;
+  let hiddenEdge = null; // posição x onde a lista terminava
+
+  function applyHidden() {
+    // Se já está escondida e ainda no DOM, nada a fazer
+    if (hiddenEl && hiddenEl.isConnected) return;
+
+    floatOpen = false;
+    const col = findSidebarColumn();
+    if (!col) return;
+    hiddenEl = col;
+    // Guarda onde a lista terminava (bordas soltas ficam nessa posição)
+    hiddenEdge = col.getBoundingClientRect().right;
+    // Só esconde a coluna: o painel da conversa já tem flex-grow
+    // e ocupa o espaço livre sozinho.
+    col.classList.add("we-hidden-sidebar");
+
+    // Remove a borda que separa a lista da conversa (vira uma linha solta)
+    for (const sib of col.parentElement.children) {
+      if (sib !== col && parseFloat(getComputedStyle(sib).flexGrow) > 0) {
+        sib.classList.add("we-no-border");
+      }
+    }
+    requestAnimationFrame(hideDividers);
+  }
+
+  function clearHidden() {
+    closeFloat();
+    removeClasses("we-divider-hidden", "we-divider-noborder");
+    removeClasses("we-no-border");
+    removeClasses("we-hidden-sidebar");
+    hiddenEl = null;
+  }
+
+  // Esconde divisórias soltas que ficam no meio da tela onde a lista
+  // terminava: elementos finos e altos, ou caixas com borda nessa posição
+  // (ex.: camadas de painéis do WhatsApp que ficam por cima da lista).
+  function hideDividers() {
+    if (!isHidden() || !hiddenEl || !hiddenEl.isConnected) return;
+    const root = hiddenEl.parentElement;
+    const main = document.getElementById("main");
+    const minHeight = window.innerHeight * 0.4;
+    const near = (x) => hiddenEdge !== null && Math.abs(x - hiddenEdge) <= 3;
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: (el) =>
+        el === hiddenEl || el === main ? NodeFilter.FILTER_REJECT
+                                        : NodeFilter.FILTER_ACCEPT,
+    });
+    for (let el = walker.nextNode(); el; el = walker.nextNode()) {
+      const r = el.getBoundingClientRect();
+      if (r.height < minHeight || r.width === 0) continue;
+
+      if (r.width <= 6 && !el.classList.contains("we-divider-hidden")) {
+        el.classList.add("we-divider-hidden");
+        console.debug("[Whats Edit] divisória fina escondida:", el);
+        continue;
+      }
+
+      const cs = getComputedStyle(el);
+      const borderRight = parseFloat(cs.borderRightWidth) > 0 && near(r.right);
+      const borderLeft = parseFloat(cs.borderLeftWidth) > 0 && near(r.left);
+      if ((borderRight || borderLeft) && !el.classList.contains("we-divider-noborder")) {
+        el.classList.add("we-divider-noborder");
+        console.debug("[Whats Edit] borda removida:", el);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Modo "escondida": lateral flutuante ao passar o mouse no botão "Conversas"
   // ---------------------------------------------------------------------------
   let floatOpen = false;
   let closeTimer = null;
@@ -114,15 +188,6 @@
     const icon = btn.querySelector("[data-icon]");
     if (icon && /^chats?(-|$)/i.test(icon.dataset.icon)) return btn;
     return null;
-  }
-
-  // Primeira cor de fundo não transparente subindo na árvore
-  function findBackground(el) {
-    for (let e = el; e; e = e.parentElement) {
-      const bg = getComputedStyle(e).backgroundColor;
-      if (bg && bg !== "transparent" && !/rgba\(.*,\s*0\)$/.test(bg)) return bg;
-    }
-    return "#fff";
   }
 
   function openFloat(btn) {
@@ -171,9 +236,112 @@
     }, delay);
   }
 
-  function setupFloat() {
+  // ---------------------------------------------------------------------------
+  // Modo "só fotos": coluna estreita com as fotos; hover mostra um cartão
+  // com os dados daquela conversa
+  // ---------------------------------------------------------------------------
+  let avatarEl = null;
+  let card = null;
+  let cardRow = null;
+
+  function applyAvatars() {
+    if (!(avatarEl && avatarEl.isConnected)) {
+      const col = findSidebarColumn();
+      if (!col) return;
+      avatarEl = col;
+      col.classList.add("we-avatars-sidebar");
+    }
+    markAvatarHides();
+  }
+
+  // Esconde tudo da coluna (cabeçalho, busca, filtros...) menos a lista
+  function markAvatarHides() {
+    const pane = document.getElementById("pane-side");
+    if (!avatarEl || !pane || !avatarEl.contains(pane)) return;
+    for (let el = pane; el && el !== avatarEl; el = el.parentElement) {
+      for (const sib of el.parentElement.children) {
+        if (sib !== el && !sib.classList.contains("we-av-hide")) {
+          sib.classList.add("we-av-hide");
+        }
+      }
+    }
+  }
+
+  function clearAvatars() {
+    hideCard();
+    removeClasses("we-av-hide");
+    removeClasses("we-avatars-sidebar");
+    avatarEl = null;
+  }
+
+  function getChatRow(target) {
+    const pane = document.getElementById("pane-side");
+    if (!pane || !target.closest || !pane.contains(target)) return null;
+    const row =
+      target.closest('[role="listitem"]') || target.closest('[role="row"]');
+    return row && pane.contains(row) ? row : null;
+  }
+
+  function showCard(row) {
+    if (row === cardRow) return;
+    cardRow = row;
+
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "we-card";
+      document.body.appendChild(card);
+    }
+
+    // Copia a linha da conversa (nome, hora, última mensagem, contador)
+    const clone = row.cloneNode(true);
+    clone.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"));
+    clone.removeAttribute("id");
+    Object.assign(clone.style, {
+      position: "relative",
+      transform: "none",
+      top: "0",
+      left: "0",
+      width: "100%",
+    });
+
+    card.replaceChildren(clone);
+    card.style.background = findBackground(row);
+
+    const rowRect = row.getBoundingClientRect();
+    const colRect = avatarEl.getBoundingClientRect();
+    card.style.left = colRect.right + 6 + "px";
+    card.classList.add("we-show");
+    const top = clamp(
+      rowRect.top,
+      4,
+      window.innerHeight - card.offsetHeight - 4
+    );
+    card.style.top = top + "px";
+  }
+
+  function hideCard() {
+    cardRow = null;
+    if (card) {
+      card.classList.remove("we-show");
+      card.replaceChildren();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Eventos de mouse/teclado da lateral (os dois modos)
+  // ---------------------------------------------------------------------------
+  function setupSidebarEvents() {
     document.addEventListener("mouseover", (e) => {
-      if (!state.sidebarHidden || !hiddenEl) return;
+      // Modo só fotos: cartão da conversa
+      if (isAvatars() && avatarEl) {
+        const row = getChatRow(e.target);
+        if (row) showCard(row);
+        else hideCard();
+        return;
+      }
+
+      // Modo escondida: lateral flutuante
+      if (!isHidden() || !hiddenEl) return;
       const btn = getChatsButton(e.target);
       if (btn) return openFloat(btn);
       if (!floatOpen) return;
@@ -183,9 +351,13 @@
 
     document.documentElement.addEventListener("mouseleave", () => {
       if (floatOpen) scheduleClose();
+      hideCard();
     });
 
-    // Clique fora da lateral -> fecha
+    // A lista rola por baixo do cartão: esconde para não ficar desalinhado
+    document.addEventListener("wheel", () => hideCard(), { passive: true });
+
+    // Clique fora da lateral flutuante -> fecha
     document.addEventListener("mousedown", (e) => {
       if (!floatOpen || !hiddenEl) return;
       if (!hiddenEl.contains(e.target) && !getChatsButton(e.target)) {
@@ -196,47 +368,6 @@
     document.addEventListener("keydown", (e) => {
       if (floatOpen && e.key === "Escape") closeFloat();
     });
-  }
-
-  // Esconde divisórias soltas que ficam no meio da tela onde a lista
-  // terminava: elementos finos e altos, ou caixas com borda nessa posição
-  // (ex.: camadas de painéis do WhatsApp que ficam por cima da lista).
-  function hideDividers() {
-    if (!state.sidebarHidden || !hiddenEl || !hiddenEl.isConnected) return;
-    const root = hiddenEl.parentElement;
-    const main = document.getElementById("main");
-    const minHeight = window.innerHeight * 0.4;
-    const near = (x) => hiddenEdge !== null && Math.abs(x - hiddenEdge) <= 3;
-
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
-      acceptNode: (el) =>
-        el === hiddenEl || el === main ? NodeFilter.FILTER_REJECT
-                                        : NodeFilter.FILTER_ACCEPT,
-    });
-    for (let el = walker.nextNode(); el; el = walker.nextNode()) {
-      const r = el.getBoundingClientRect();
-      if (r.height < minHeight || r.width === 0) continue;
-
-      if (r.width <= 6 && !el.classList.contains("we-divider-hidden")) {
-        el.classList.add("we-divider-hidden");
-        console.debug("[Whats Edit] divisória fina escondida:", el);
-        continue;
-      }
-
-      const cs = getComputedStyle(el);
-      const borderRight = parseFloat(cs.borderRightWidth) > 0 && near(r.right);
-      const borderLeft = parseFloat(cs.borderLeftWidth) > 0 && near(r.left);
-      if ((borderRight || borderLeft) && !el.classList.contains("we-divider-noborder")) {
-        el.classList.add("we-divider-noborder");
-        console.debug("[Whats Edit] borda removida:", el);
-      }
-    }
-  }
-
-  function toggleSidebar() {
-    state.sidebarHidden = !state.sidebarHidden;
-    saveState();
-    applySidebar();
   }
 
   // ---------------------------------------------------------------------------
@@ -259,11 +390,17 @@
   const actions = [
     {
       id: "toggle-sidebar",
-      label: () =>
-        state.sidebarHidden ? "Mostrar conversas" : "Esconder conversas",
+      label: () => (isHidden() ? "Mostrar conversas" : "Esconder conversas"),
       shortcut: "Alt+S",
       key: "KeyS",
-      run: toggleSidebar,
+      run: () => setSidebarMode(isHidden() ? "visible" : "hidden"),
+    },
+    {
+      id: "toggle-avatars",
+      label: () => (isAvatars() ? "Mostrar conversas" : "Só fotos"),
+      shortcut: "Alt+A",
+      key: "KeyA",
+      run: () => setSidebarMode(isAvatars() ? "visible" : "avatars"),
     },
     {
       id: "toggle-blur",
@@ -382,10 +519,6 @@
     });
   }
 
-  function clamp(v, min, max) {
-    return Math.max(min, Math.min(max, v));
-  }
-
   // ---------------------------------------------------------------------------
   // Atalhos de teclado
   // ---------------------------------------------------------------------------
@@ -408,16 +541,22 @@
   async function init() {
     await loadState();
     buildUI();
-    setupFloat();
+    setupSidebarEvents();
 
     // O WhatsApp recria partes da página com frequência; reaplica quando preciso
-    let dividerTimer = null;
+    let fixTimer = null;
     const observer = new MutationObserver(() => {
-      if (!state.sidebarHidden) return;
-      if (!(hiddenEl && hiddenEl.isConnected)) applySidebar();
-      // A divisória pode ser recriada (ex.: ao trocar de conversa)
-      clearTimeout(dividerTimer);
-      dividerTimer = setTimeout(hideDividers, 300);
+      if (isHidden()) {
+        if (!(hiddenEl && hiddenEl.isConnected)) applySidebar();
+        // A divisória pode ser recriada (ex.: ao trocar de conversa)
+        clearTimeout(fixTimer);
+        fixTimer = setTimeout(hideDividers, 300);
+      } else if (isAvatars()) {
+        if (!(avatarEl && avatarEl.isConnected)) applySidebar();
+        // Cabeçalho/busca podem ser recriados
+        clearTimeout(fixTimer);
+        fixTimer = setTimeout(markAvatarHides, 300);
+      }
     });
     observer.observe(document.body, { childList: true, subtree: true });
 

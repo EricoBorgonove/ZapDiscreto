@@ -3,6 +3,40 @@
   display: none !important;
 }
 
+/* ---------- Modo só fotos ---------- */
+.we-avatars-sidebar {
+  flex: 0 0 76px !important;
+  width: 76px !important;
+  min-width: 76px !important;
+  max-width: 76px !important;
+  overflow: hidden !important;
+}
+
+.we-av-hide {
+  display: none !important;
+}
+
+.we-avatars-sidebar #pane-side {
+  overflow-x: hidden !important;
+  scrollbar-width: none;
+}
+
+/* Cartão com os dados da conversa (hover numa foto) */
+#we-card {
+  position: fixed;
+  z-index: 1001;
+  width: 380px;
+  border-radius: 8px;
+  overflow: hidden;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  display: none;
+}
+
+#we-card.we-show {
+  display: block;
+}
+
 /* Painel da conversa sem a borda esquerda enquanto a lista está escondida */
 .we-no-border,
 .we-no-border > div,
