@@ -58,28 +58,13 @@
       const col = findSidebarColumn();
       if (!col) return;
       hiddenEl = col;
+      // Só esconde a coluna: o painel da conversa já tem flex-grow
+      // e ocupa o espaço livre sozinho.
       col.classList.add("we-hidden-sidebar");
-
-      // Faz os irmãos (painel da conversa) ocuparem o espaço livre
-      for (const sib of col.parentElement.children) {
-        if (sib !== col) sib.classList.add("we-expand");
-      }
-      const parent = col.parentElement;
-      if (getComputedStyle(parent).display.includes("grid")) {
-        parent.dataset.weGridCols = parent.style.gridTemplateColumns || "";
-        parent.style.gridTemplateColumns = "1fr";
-      }
     } else {
       document
         .querySelectorAll(".we-hidden-sidebar")
         .forEach((el) => el.classList.remove("we-hidden-sidebar"));
-      document
-        .querySelectorAll(".we-expand")
-        .forEach((el) => el.classList.remove("we-expand"));
-      document.querySelectorAll("[data-we-grid-cols]").forEach((el) => {
-        el.style.gridTemplateColumns = el.dataset.weGridCols;
-        delete el.dataset.weGridCols;
-      });
       hiddenEl = null;
     }
     updateMenuLabels();

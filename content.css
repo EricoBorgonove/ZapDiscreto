@@ -3,12 +3,6 @@
   display: none !important;
 }
 
-.we-expand {
-  flex: 1 1 auto !important;
-  max-width: 100% !important;
-  width: auto !important;
-}
-
 /* ---------- Botão flutuante ---------- */
 #we-root {
   position: fixed;
