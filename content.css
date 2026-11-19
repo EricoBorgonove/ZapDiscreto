@@ -3,6 +3,13 @@
   display: none !important;
 }
 
+/* Painel da conversa sem a borda esquerda enquanto a lista está escondida */
+.we-no-border,
+.we-no-border > div,
+.we-no-border #main {
+  border-left: none !important;
+}
+
 /* Lateral aberta como painel flutuante (hover no botão de Conversas) */
 .we-hidden-sidebar.we-float {
   display: flex !important;

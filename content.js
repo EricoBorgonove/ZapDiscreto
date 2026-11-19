@@ -65,8 +65,18 @@
       // Só esconde a coluna: o painel da conversa já tem flex-grow
       // e ocupa o espaço livre sozinho.
       col.classList.add("we-hidden-sidebar");
+
+      // Remove a borda que separa a lista da conversa (vira uma linha solta)
+      for (const sib of col.parentElement.children) {
+        if (sib !== col && parseFloat(getComputedStyle(sib).flexGrow) > 0) {
+          sib.classList.add("we-no-border");
+        }
+      }
     } else {
       closeFloat();
+      document
+        .querySelectorAll(".we-no-border")
+        .forEach((el) => el.classList.remove("we-no-border"));
       document
         .querySelectorAll(".we-hidden-sidebar")
         .forEach((el) => el.classList.remove("we-hidden-sidebar"));
