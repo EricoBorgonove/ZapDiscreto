@@ -9,6 +9,8 @@
 
   const isHidden = () => state.sidebarMode === "hidden";
   const isAvatars = () => state.sidebarMode === "avatars";
+  // Nos dois modos a coluna original do WhatsApp fica escondida
+  const colHidden = () => isHidden() || isAvatars();
 
   // ---------------------------------------------------------------------------
   // Armazenamento
@@ -83,11 +85,32 @@
   // Modo lateral: aplica o modo atual e desfaz os outros
   // ---------------------------------------------------------------------------
   function applySidebar() {
-    if (!isHidden()) clearHidden();
     if (!isAvatars()) clearAvatars();
-    if (isHidden()) applyHidden();
-    else if (isAvatars()) applyAvatars();
+    if (!colHidden()) clearHidden();
+    if (colHidden()) applyHidden();
+    if (isAvatars()) applyAvatars();
     updateMenuLabels();
+  }
+
+  // Proteção: se o WhatsApp recriar a coluna em loop, desliga o modo
+  const reapplyTimes = [];
+  function loopDetected() {
+    const now = Date.now();
+    reapplyTimes.push(now);
+    while (reapplyTimes.length && now - reapplyTimes[0] > 5000) {
+      reapplyTimes.shift();
+    }
+    if (reapplyTimes.length > 15) {
+      console.warn("[Whats Edit] loop detectado; voltando ao modo visível");
+      reapplyTimes.length = 0;
+      state.sidebarMode = "visible";
+      saveState();
+      clearAvatars();
+      clearHidden();
+      updateMenuLabels();
+      return true;
+    }
+    return false;
   }
 
   function setSidebarMode(mode) {
@@ -109,6 +132,7 @@
     floatOpen = false;
     const col = findSidebarColumn();
     if (!col) return;
+    if (loopDetected()) return;
     hiddenEl = col;
     // Guarda onde a lista terminava (bordas soltas ficam nessa posição)
     hiddenEdge = col.getBoundingClientRect().right;
@@ -137,7 +161,7 @@
   // terminava: elementos finos e altos, ou caixas com borda nessa posição
   // (ex.: camadas de painéis do WhatsApp que ficam por cima da lista).
   function hideDividers() {
-    if (!isHidden() || !hiddenEl || !hiddenEl.isConnected) return;
+    if (!colHidden() || !hiddenEl || !hiddenEl.isConnected) return;
     const root = hiddenEl.parentElement;
     const main = document.getElementById("main");
     const minHeight = window.innerHeight * 0.4;
@@ -237,52 +261,157 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Modo "só fotos": coluna estreita com as fotos; hover mostra um cartão
-  // com os dados daquela conversa
+  // Modo "só fotos": a coluna original fica escondida (como no modo
+  // escondida) e a extensão desenha a própria faixa de fotos, copiando os
+  // dados das conversas que o WhatsApp tem na página. Não mexe na largura
+  // da coluna do WhatsApp.
   // ---------------------------------------------------------------------------
-  let avatarEl = null;
+  const STRIP_WIDTH = 72;
+  let strip = null;
+  let stripKey = "";
+  let stripTimer = null;
   let card = null;
   let cardRow = null;
 
   function applyAvatars() {
-    if (!(avatarEl && avatarEl.isConnected)) {
-      const col = findSidebarColumn();
-      if (!col) return;
-      avatarEl = col;
-      col.classList.add("we-avatars-sidebar");
+    if (!hiddenEl) return;
+    if (!strip) {
+      strip = document.createElement("div");
+      strip.id = "we-strip";
+      document.body.appendChild(strip);
     }
-    markAvatarHides();
-  }
-
-  // Esconde tudo da coluna (cabeçalho, busca, filtros...) menos a lista
-  function markAvatarHides() {
-    const pane = document.getElementById("pane-side");
-    if (!avatarEl || !pane || !avatarEl.contains(pane)) return;
-    for (let el = pane; el && el !== avatarEl; el = el.parentElement) {
-      for (const sib of el.parentElement.children) {
-        if (sib !== el && !sib.classList.contains("we-av-hide")) {
-          sib.classList.add("we-av-hide");
-        }
+    // Abre espaço à esquerda do painel da conversa para a faixa
+    for (const sib of hiddenEl.parentElement.children) {
+      if (sib !== hiddenEl && parseFloat(getComputedStyle(sib).flexGrow) > 0) {
+        sib.classList.add("we-avatar-space");
       }
     }
+    positionStrip();
+    renderStrip();
   }
 
   function clearAvatars() {
     hideCard();
-    removeClasses("we-av-hide");
-    removeClasses("we-avatars-sidebar");
-    avatarEl = null;
+    clearTimeout(stripTimer);
+    removeClasses("we-avatar-space");
+    if (strip) strip.remove();
+    strip = null;
+    stripKey = "";
   }
 
-  function getChatRow(target) {
+  // Coloca a faixa colada na barra de ícones da esquerda
+  function positionStrip() {
+    if (!strip || !hiddenEl || !hiddenEl.isConnected) return;
+    const parent = hiddenEl.parentElement;
+    const pRect = parent.getBoundingClientRect();
+    let left = pRect.left + 64;
+    for (const sib of parent.children) {
+      if (sib === hiddenEl) continue;
+      const r = sib.getBoundingClientRect();
+      const pos = getComputedStyle(sib).position;
+      if (pos !== "absolute" && pos !== "fixed" && r.width > 20 && r.width < 120) {
+        left = r.right;
+        break;
+      }
+    }
+    Object.assign(strip.style, {
+      left: left + "px",
+      top: pRect.top + "px",
+      height: pRect.height + "px",
+      width: STRIP_WIDTH + "px",
+      background: findBackground(hiddenEl),
+    });
+  }
+
+  function scheduleStrip() {
+    clearTimeout(stripTimer);
+    stripTimer = setTimeout(renderStrip, 400);
+  }
+
+  function getChatRows() {
     const pane = document.getElementById("pane-side");
-    if (!pane || !target.closest || !pane.contains(target)) return null;
-    const row =
-      target.closest('[role="listitem"]') || target.closest('[role="row"]');
-    return row && pane.contains(row) ? row : null;
+    if (!pane) return [];
+    let rows = [...pane.querySelectorAll('[role="listitem"]')];
+    if (!rows.length) rows = [...pane.querySelectorAll('[role="row"]')];
+    // A lista é virtualizada: a ordem visual vem do translateY
+    const y = (el) => {
+      const m = /translateY\((-?[\d.]+)px\)/.exec(el.style.transform || "");
+      return m ? parseFloat(m[1]) : 0;
+    };
+    return rows.sort((a, b) => y(a) - y(b));
   }
 
-  function showCard(row) {
+  function rowInfo(row) {
+    const nameEl = row.querySelector("span[title]");
+    const img = row.querySelector("img");
+    const unreadEl = row.querySelector(
+      '[aria-label*="não lida" i], [aria-label*="unread" i]'
+    );
+    return {
+      name: nameEl ? nameEl.title : "",
+      img: img && img.src ? img.src : "",
+      unread: unreadEl ? unreadEl.textContent.trim() : "",
+    };
+  }
+
+  function renderStrip() {
+    if (!strip || !isAvatars()) return;
+    const rows = getChatRows();
+    const infos = rows.map(rowInfo);
+
+    // Só redesenha se algo mudou (evita trabalho à toa)
+    const key = infos.map((i) => i.name + "|" + i.img + "|" + i.unread).join("\n");
+    if (key === stripKey) return;
+    stripKey = key;
+
+    const items = rows.map((row, idx) => {
+      const info = infos[idx];
+      const item = document.createElement("div");
+      item.className = "we-av-item";
+      item.title = "";
+
+      if (info.img) {
+        const img = document.createElement("img");
+        img.src = info.img;
+        img.alt = "";
+        item.appendChild(img);
+      } else {
+        const ini = document.createElement("div");
+        ini.className = "we-av-initials";
+        ini.textContent = (info.name.trim()[0] || "?").toUpperCase();
+        item.appendChild(ini);
+      }
+
+      if (info.unread) {
+        const badge = document.createElement("span");
+        badge.className = "we-av-badge";
+        badge.textContent = info.unread;
+        item.appendChild(badge);
+      }
+
+      item.addEventListener("click", () => openChat(row, info.name));
+      item.addEventListener("mouseenter", () => showCard(row, item));
+      item.addEventListener("mouseleave", hideCard);
+      return item;
+    });
+
+    strip.replaceChildren(...items);
+  }
+
+  // Abre a conversa simulando um clique na linha original (escondida)
+  function openChat(row, name) {
+    if (!row.isConnected && name) {
+      row = getChatRows().find((r) => rowInfo(r).name === name) || row;
+    }
+    const target = row.querySelector("span[title]") || row;
+    for (const type of ["mousedown", "mouseup", "click"]) {
+      target.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, cancelable: true, view: window })
+      );
+    }
+  }
+
+  function showCard(row, anchor) {
     if (row === cardRow) return;
     cardRow = row;
 
@@ -307,12 +436,12 @@
     card.replaceChildren(clone);
     card.style.background = findBackground(row);
 
-    const rowRect = row.getBoundingClientRect();
-    const colRect = avatarEl.getBoundingClientRect();
-    card.style.left = colRect.right + 6 + "px";
+    const aRect = anchor.getBoundingClientRect();
+    const sRect = strip.getBoundingClientRect();
+    card.style.left = sRect.right + 6 + "px";
     card.classList.add("we-show");
     const top = clamp(
-      rowRect.top,
+      aRect.top + aRect.height / 2 - card.offsetHeight / 2,
       4,
       window.innerHeight - card.offsetHeight - 4
     );
@@ -332,16 +461,8 @@
   // ---------------------------------------------------------------------------
   function setupSidebarEvents() {
     document.addEventListener("mouseover", (e) => {
-      // Modo só fotos: cartão da conversa
-      if (isAvatars() && avatarEl) {
-        const row = getChatRow(e.target);
-        if (row) showCard(row);
-        else hideCard();
-        return;
-      }
-
-      // Modo escondida: lateral flutuante
-      if (!isHidden() || !hiddenEl) return;
+      // Lateral flutuante (modo escondida e modo só fotos)
+      if (!colHidden() || !hiddenEl) return;
       const btn = getChatsButton(e.target);
       if (btn) return openFloat(btn);
       if (!floatOpen) return;
@@ -354,8 +475,10 @@
       hideCard();
     });
 
-    // A lista rola por baixo do cartão: esconde para não ficar desalinhado
+    // A faixa rola por baixo do cartão: esconde para não ficar desalinhado
     document.addEventListener("wheel", () => hideCard(), { passive: true });
+
+    window.addEventListener("resize", positionStrip);
 
     // Clique fora da lateral flutuante -> fecha
     document.addEventListener("mousedown", (e) => {
@@ -544,19 +667,23 @@
     setupSidebarEvents();
 
     // O WhatsApp recria partes da página com frequência; reaplica quando preciso
+    // Elementos da própria extensão não devem disparar o observador
+    const isOurs = (node) => {
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      return !!(el && el.closest && el.closest("#we-root, #we-strip, #we-card"));
+    };
+
     let fixTimer = null;
-    const observer = new MutationObserver(() => {
-      if (isHidden()) {
-        if (!(hiddenEl && hiddenEl.isConnected)) applySidebar();
-        // A divisória pode ser recriada (ex.: ao trocar de conversa)
-        clearTimeout(fixTimer);
-        fixTimer = setTimeout(hideDividers, 300);
-      } else if (isAvatars()) {
-        if (!(avatarEl && avatarEl.isConnected)) applySidebar();
-        // Cabeçalho/busca podem ser recriados
-        clearTimeout(fixTimer);
-        fixTimer = setTimeout(markAvatarHides, 300);
-      }
+    const observer = new MutationObserver((records) => {
+      if (!colHidden()) return;
+      if (records.every((r) => isOurs(r.target))) return;
+
+      if (!(hiddenEl && hiddenEl.isConnected)) applySidebar();
+      // A divisória pode ser recriada (ex.: ao trocar de conversa)
+      clearTimeout(fixTimer);
+      fixTimer = setTimeout(hideDividers, 300);
+      // A lista de conversas mudou (mensagem nova, ordem, foto...)
+      if (isAvatars()) scheduleStrip();
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
