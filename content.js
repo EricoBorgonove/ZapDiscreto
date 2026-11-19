@@ -72,8 +72,12 @@
           sib.classList.add("we-no-border");
         }
       }
+      requestAnimationFrame(hideDividers);
     } else {
       closeFloat();
+      document
+        .querySelectorAll(".we-divider-hidden")
+        .forEach((el) => el.classList.remove("we-divider-hidden"));
       document
         .querySelectorAll(".we-no-border")
         .forEach((el) => el.classList.remove("we-no-border"));
@@ -187,6 +191,27 @@
     document.addEventListener("keydown", (e) => {
       if (floatOpen && e.key === "Escape") closeFloat();
     });
+  }
+
+  // Esconde divisórias soltas (elementos finos e altos, ex.: alça de
+  // redimensionar a lista) que ficam sobrando no meio da tela.
+  function hideDividers() {
+    if (!state.sidebarHidden || !hiddenEl || !hiddenEl.isConnected) return;
+    const root = hiddenEl.parentElement;
+    const main = document.getElementById("main");
+    const minHeight = window.innerHeight * 0.4;
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+      acceptNode: (el) =>
+        el === hiddenEl || el === main ? NodeFilter.FILTER_REJECT
+                                        : NodeFilter.FILTER_ACCEPT,
+    });
+    for (let el = walker.nextNode(); el; el = walker.nextNode()) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.width <= 6 && r.height > minHeight) {
+        el.classList.add("we-divider-hidden");
+      }
+    }
   }
 
   function toggleSidebar() {
@@ -367,10 +392,13 @@
     setupFloat();
 
     // O WhatsApp recria partes da página com frequência; reaplica quando preciso
+    let dividerTimer = null;
     const observer = new MutationObserver(() => {
-      if (state.sidebarHidden && !(hiddenEl && hiddenEl.isConnected)) {
-        applySidebar();
-      }
+      if (!state.sidebarHidden) return;
+      if (!(hiddenEl && hiddenEl.isConnected)) applySidebar();
+      // A divisória pode ser recriada (ex.: ao trocar de conversa)
+      clearTimeout(dividerTimer);
+      dividerTimer = setTimeout(hideDividers, 300);
     });
     observer.observe(document.body, { childList: true, subtree: true });
 

@@ -10,6 +10,11 @@
   border-left: none !important;
 }
 
+/* Divisórias soltas detectadas quando a lista é escondida */
+.we-divider-hidden {
+  visibility: hidden !important;
+}
+
 /* Lateral aberta como painel flutuante (hover no botão de Conversas) */
 .we-hidden-sidebar.we-float {
   display: flex !important;
