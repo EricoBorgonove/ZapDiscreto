@@ -821,29 +821,50 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Janela flutuante (Document Picture-in-Picture, como o Meet): mostra uma
-  // cópia ao vivo da conversa aberta numa janelinha sempre por cima, com um
-  // campo para responder que escreve no WhatsApp e envia.
+  // Janela flutuante (Document Picture-in-Picture, como o Meet)
+  // O WhatsApp continua na aba. A janela mostra uma cópia ao vivo da conversa
+  // aberta, uma faixa de fotos para trocar de conversa e um campo que escreve
+  // e envia pela barra do WhatsApp na aba.
+  // (Mover o WhatsApp de verdade para a janela quebrava o editor de mensagens
+  // dele; essa versão está no histórico do git.)
   // ---------------------------------------------------------------------------
   const PIP_ROWS = 40; // quantas mensagens recentes mostrar
+  const PIP_STRIP = 56; // largura da faixa de fotos
   let pipWin = null;
-  let pipMode = null; // "full" (WhatsApp de verdade) | "lite" (cópia)
-  let pipAppRoot = null; // raiz do WhatsApp movida para a janela
-  let pipPlaceholder = null; // aviso que fica na aba enquanto isso
-  let pipHeadObserver = null;
-  const PIP_STRIP = 56; // largura da faixa de fotos na janela
-  let pipStrip = null;
-  let pipStripKey = "";
   let pipObserver = null;
   let pipTimer = null;
   let pipSig = "";
+  let pipStripKey = "";
+  let pipLastRender = 0;
 
   const PIP_CSS = `
     html, body { margin: 0; height: 100%; overflow: hidden; }
-    #we-pip { display: flex; flex-direction: column; height: 100vh;
+    #we-pip { display: flex; height: 100vh;
       font-family: Segoe UI, Helvetica, Arial, sans-serif; }
+
+    /* Faixa de fotos para trocar de conversa */
+    #we-pip-strip { flex: 0 0 ${PIP_STRIP}px; box-sizing: border-box; padding: 8px 0;
+      overflow-y: auto; scrollbar-width: none; background: rgba(0,0,0,.25);
+      display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    #we-pip-strip .we-av-item { position: relative; flex: 0 0 40px;
+      width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
+    #we-pip-strip .we-av-item:hover,
+    #we-pip-strip .we-av-item.we-current { outline: 2px solid #00a884; outline-offset: 2px; }
+    #we-pip-strip .we-av-item img, #we-pip-strip .we-av-initials {
+      display: block; width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+    #we-pip-strip .we-av-initials { display: flex; align-items: center;
+      justify-content: center; background: #6a7175; color: #fff;
+      font: 600 16px Segoe UI, Helvetica, Arial, sans-serif; }
+    #we-pip-strip .we-av-badge { position: absolute; top: -3px; right: -5px;
+      box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 4px;
+      border-radius: 8px; background: #25d366; color: #111b21;
+      font: 600 10px Segoe UI, Helvetica, Arial, sans-serif;
+      display: flex; align-items: center; justify-content: center; }
+
+    /* Conversa */
+    #we-pip-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
     #we-pip-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
-      padding: 8px 12px; background: rgba(0,0,0,.3); color: #e9edef;
+      padding: 8px 12px; background: #202c33; color: #e9edef;
       font-size: 14px; font-weight: 600; }
     #we-pip-head img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
     #we-pip-head img:not([src]), #we-pip-head img[src=""] { display: none; }
@@ -851,15 +872,24 @@
     #we-pip-msgs { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 6px 0; }
     #we-pip-empty { color: #8696a0; text-align: center; padding: 40px 16px; font-size: 13px; }
     #we-pip-form { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
-      padding: 8px; background: rgba(0,0,0,.3); }
-    #we-pip-input { flex: 1; resize: none; border: none; outline: none; border-radius: 8px;
-      padding: 9px 12px; max-height: 110px; background: #2a3942; color: #e9edef;
-      font: 14px Segoe UI, Helvetica, Arial, sans-serif; }
+      padding: 8px 10px; background: #202c33; }
+    #we-pip-input { flex: 1; resize: none; box-sizing: border-box; border: none;
+      outline: none; border-radius: 8px; padding: 9px 12px; max-height: 120px;
+      background: #2a3942; color: #e9edef; line-height: 20px;
+      font: 15px Segoe UI, Helvetica, Arial, sans-serif; }
+    #we-pip-input.we-error { box-shadow: 0 0 0 2px #e5534b; }
     #we-pip-send { flex: 0 0 38px; height: 38px; border: none; border-radius: 50%;
       background: #00a884; color: #fff; font-size: 16px; cursor: pointer; }
     #we-pip-send:disabled { opacity: .5; cursor: default; }
-    #we-pip-status { min-height: 14px; padding: 0 12px 4px; font-size: 11px; color: #8696a0;
-      background: rgba(0,0,0,.3); }
+    #we-pip-status:empty { display: none; }
+    #we-pip-status { padding: 0 12px 6px; font-size: 11px; color: #e5534b;
+      background: #202c33; }
+
+    /* Tema claro do WhatsApp */
+    body:not(.dark) #we-pip-head, body:not(.dark) #we-pip-form,
+    body:not(.dark) #we-pip-status { background: #f0f2f5; color: #111b21; }
+    body:not(.dark) #we-pip-input { background: #fff; color: #111b21; }
+    body:not(.dark) #we-pip-strip { background: rgba(0,0,0,.06); }
   `;
 
   async function openPipWindow(width, height) {
@@ -905,380 +935,21 @@
     doc.head.appendChild(copy);
   }
 
-  // ---- Modo completo: move o WhatsApp de verdade para a janela ----------
-
-  // Raiz do app do WhatsApp: o ancestral de #app que é filho direto do body
-  function findAppRoot() {
-    let el = document.getElementById("app");
-    while (el && el.parentElement && el.parentElement !== document.body) {
-      el = el.parentElement;
-    }
-    return el && el.parentElement === document.body ? el : null;
-  }
-
   async function togglePip() {
     if (pipWin) {
       pipWin.close();
       return;
     }
-    const appRoot = findAppRoot();
-    if (!appRoot) {
-      alert("Não encontrei o WhatsApp na página. Espere carregar e tente de novo.");
-      return;
-    }
     if (!document.getElementById("main")) {
       alert("Abra uma conversa primeiro.");
       return;
     }
-    const win = await openPipWindow(420, 640);
+    const win = await openPipWindow(440, 600);
     if (!win) return;
     pipWin = win;
-    pipMode = "full";
 
-    const doc = win.document;
-    copyStyles(doc);
-    doc.title = "WhatsApp";
-    const base = doc.createElement("style");
-    base.textContent = `
-      html, body { margin: 0; height: 100%; overflow: hidden; }
-      /* Só a conversa: esconde barra de ícones e lista de conversas */
-      .we-pip-hide { display: none !important; }
-      /* Mesmas correções da linha branca usadas na aba (content.css) */
-      .we-no-border, .we-no-border > div, .we-no-border #main {
-        border-left: none !important; }
-      .we-divider-hidden { visibility: hidden !important; }
-      .we-divider-noborder { border-left: none !important; border-right: none !important; }
-      /* Lista de conversas: fora da tela, mas com tamanho real, para o
-         WhatsApp continuar carregando as conversas usadas pela faixa */
-      .we-pip-offscreen { position: fixed !important; left: -10000px !important;
-        top: 0 !important; width: 360px !important; height: 100vh !important;
-        visibility: hidden !important; pointer-events: none !important; }
-      .we-pip-layout { min-width: 0 !important; width: 100% !important; }
-      /* Botão "Adicionar à lista" do topo ocupa espaço demais na janela */
-      #main header :has(> button[aria-label="Adicionar à lista"]),
-      #main header :has(> button[aria-label="Add to list"]),
-      #main header span:has(> div > button[aria-label="Adicionar à lista"]),
-      #main header span:has(> div > button[aria-label="Add to list"]) { display: none !important; }
-      .we-pip-main { flex: 1 1 auto !important; width: auto !important;
-        max-width: none !important; min-width: 0 !important;
-        margin-left: ${PIP_STRIP}px !important; border-left: none !important;
-        box-sizing: border-box !important;
-        padding-bottom: var(--we-bar-h, 56px) !important; }
-
-      /* A barra de digitar original quebra aqui dentro: fica escondida e a
-         nossa barra (#we-pip-bar) envia pela aba */
-      .we-pip-main footer { display: none !important; }
-      #we-pip-bar { position: fixed; left: ${PIP_STRIP}px; right: 0; bottom: 0;
-        z-index: 2147483000; box-sizing: border-box; padding: 8px 10px;
-        display: flex; align-items: flex-end; gap: 8px; background: #f0f2f5; }
-      .dark #we-pip-bar { background: #202c33; }
-      #we-pip-bar textarea { flex: 1; resize: none; box-sizing: border-box;
-        max-height: 120px; padding: 9px 12px; border: none; border-radius: 8px;
-        outline: none; background: #fff; color: #111b21;
-        font: 15px Segoe UI, Helvetica, Arial, sans-serif; line-height: 20px; }
-      .dark #we-pip-bar textarea { background: #2a3942; color: #e9edef; }
-      #we-pip-bar textarea.we-error { box-shadow: 0 0 0 2px #e5534b; }
-      #we-pip-bar button { flex: 0 0 38px; height: 38px; border: none;
-        border-radius: 50%; background: #00a884; color: #fff; font-size: 16px;
-        cursor: pointer; }
-      #we-pip-bar button:disabled { opacity: .5; cursor: default; }
-
-      /* Faixa de fotos para trocar de conversa */
-      /* z-index alto: as camadas do WhatsApp ficavam por cima da faixa */
-      #we-pip-strip { position: fixed; left: 0; top: 0; bottom: 0; z-index: 2147483000;
-        width: ${PIP_STRIP}px; box-sizing: border-box; padding: 8px 0;
-        overflow-y: auto; scrollbar-width: none;
-        display: flex; flex-direction: column; align-items: center; gap: 8px; }
-      #we-pip-strip .we-av-item { position: relative; flex: 0 0 40px;
-        width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
-      #we-pip-strip .we-av-item:hover,
-      #we-pip-strip .we-av-item.we-current { outline: 2px solid #00a884;
-        outline-offset: 2px; }
-      #we-pip-strip .we-av-item img, #we-pip-strip .we-av-initials {
-        display: block; width: 40px; height: 40px; border-radius: 50%;
-        object-fit: cover; }
-      #we-pip-strip .we-av-initials { display: flex; align-items: center;
-        justify-content: center; background: #6a7175; color: #fff;
-        font: 600 16px Segoe UI, Helvetica, Arial, sans-serif; }
-      #we-pip-strip .we-av-badge { position: absolute; top: -3px; right: -5px;
-        box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 4px;
-        border-radius: 8px; background: #25d366; color: #111b21;
-        font: 600 10px Segoe UI, Helvetica, Arial, sans-serif;
-        display: flex; align-items: center; justify-content: center; }
-    `;
-    doc.head.appendChild(base);
-
-    // Estilos que o WhatsApp carregar depois (ex.: painel de emojis)
-    pipHeadObserver = new MutationObserver((records) => {
-      for (const r of records) {
-        for (const n of r.addedNodes) {
-          if (n.tagName === "STYLE" || (n.tagName === "LINK" && n.rel === "stylesheet")) {
-            copyStyleNode(n, doc);
-          }
-        }
-      }
-    });
-    pipHeadObserver.observe(document.head, { childList: true });
-
-    // Aviso na aba enquanto o WhatsApp está na janela
-    pipPlaceholder = document.createElement("div");
-    pipPlaceholder.id = "we-pip-placeholder";
-    pipPlaceholder.innerHTML = `
-      <div>O WhatsApp está aberto na janela flutuante</div>
-      <button type="button">Trazer de volta</button>`;
-    pipPlaceholder
-      .querySelector("button")
-      .addEventListener("click", () => pipWin && pipWin.close());
-
-    pipAppRoot = appRoot;
-    document.body.insertBefore(pipPlaceholder, appRoot);
-    pipBlurComposer();
-    doc.body.appendChild(appRoot);
-    pipOnlyChat();
-    buildPipBar(doc);
-    pipScrollToEnd();
-
-    // O WhatsApp redesenha partes da tela; reaplica "só a conversa"
-    pipObserver = new MutationObserver(() => {
-      if (!pipWin) return;
-      pipWin.clearTimeout(pipTimer);
-      pipTimer = pipWin.setTimeout(pipOnlyChat, 100);
-    });
-    pipObserver.observe(doc.body, { childList: true, subtree: true });
-
+    setupPipDocument(win.document);
     win.addEventListener("pagehide", cleanupPip);
-    updateMenuLabels();
-  }
-
-  // Na janela, deixa só o painel da conversa: no container que tem a lista
-  // (#side) e a conversa (#main), esconde os outros itens do layout.
-  // Camadas sobrepostas (absolute/fixed) ficam, pois hospedam menus e painéis.
-  function pipOnlyChat() {
-    if (!pipWin || !pipAppRoot) return;
-    const main = pipAppRoot.querySelector("#main");
-    const side = pipAppRoot.querySelector("#side");
-    if (!main || !side) return;
-
-    // Menor ancestral comum de #main e #side
-    let layout = main.parentElement;
-    while (layout && !layout.contains(side)) layout = layout.parentElement;
-    if (!layout) return;
-
-    // O layout do WhatsApp tem largura mínima (~748px) e estoura a janela
-    layout.classList.add("we-pip-layout");
-
-    const view = pipWin;
-    for (const child of layout.children) {
-      if (child.contains(main)) {
-        child.classList.add("we-pip-main");
-        continue;
-      }
-      if (child.contains(side)) {
-        child.classList.add("we-pip-offscreen");
-        continue;
-      }
-      const pos = view.getComputedStyle(child).position;
-      if (pos === "absolute" || pos === "fixed") continue;
-      child.classList.add("we-pip-hide");
-    }
-
-    renderPipStrip(side);
-  }
-
-  // Faixa de fotos dentro da janela flutuante: clicar troca a conversa
-  function renderPipStrip(side) {
-    const d = pipWin.document;
-    if (!pipStrip || !pipStrip.isConnected) {
-      pipStrip = d.createElement("div");
-      pipStrip.id = "we-pip-strip";
-      d.body.appendChild(pipStrip);
-      pipStripKey = "";
-    }
-    pipStrip.style.background = findBackground(side, pipWin);
-
-    const rows = getChatRows(pipAppRoot);
-    const infos = rows.map(rowInfo);
-    // Conversa aberta = linha marcada como selecionada pelo WhatsApp
-    const currentRow = rows.find(isSelectedRow);
-    const current = currentRow ? rowInfo(currentRow).name : "";
-
-    // Só redesenha se algo mudou
-    const key =
-      current + "\n" + infos.map((i) => i.name + "|" + i.img + "|" + i.unread).join("\n");
-    if (key === pipStripKey) return;
-    pipStripKey = key;
-
-    const items = rows.map((row, idx) => {
-      const info = infos[idx];
-      const item = makeAvatarItem(d, info);
-      item.title = info.name;
-      if (info.name && info.name === current) item.classList.add("we-current");
-      item.addEventListener("click", () => pipSwitchChat(row, info.name));
-      return item;
-    });
-    pipStrip.replaceChildren(...items);
-  }
-
-  // O campo de digitar do WhatsApp quebra se for criado dentro da janela
-  // flutuante. Então a troca de conversa acontece na aba: o WhatsApp volta
-  // para lá por um instante, abre a conversa e é levado de novo para a janela.
-  // Leva o WhatsApp de volta para a aba, roda fn() lá e traz para a janela.
-  // O aviso "Trazer de volta" continua por cima da aba durante isso.
-  let pipBusy = false;
-  async function pipInTab(fn) {
-    if (!pipWin || !pipAppRoot || !pipPlaceholder || pipBusy) return undefined;
-    pipBusy = true;
-    try {
-      document.body.insertBefore(pipAppRoot, pipPlaceholder);
-      return await fn();
-    } finally {
-      if (pipWin && pipAppRoot) {
-        const body = pipWin.document.body;
-        body.insertBefore(pipAppRoot, body.firstChild);
-        pipOnlyChat();
-        pipScrollToEnd();
-      }
-      pipBusy = false;
-    }
-  }
-
-  async function pipSwitchChat(row, name) {
-    const before = pipAppRoot && pipAppRoot.querySelector("#main");
-    await pipInTab(async () => {
-      openChat(row, name, pipAppRoot);
-      // Espera a conversa nova abrir com o campo de digitar (até 3 s)
-      for (let i = 0; i < 30; i++) {
-        await pipSleep(100);
-        const main = pipAppRoot.querySelector("#main");
-        const box = main && main.querySelector('footer [contenteditable="true"]');
-        if (box && main !== before) break;
-        if (box && isSelectedRow(row) && rowInfo(row).name === name) break;
-      }
-      // O WhatsApp põe o cursor na barra logo depois de abrir a conversa;
-      // se isso acontecer já dentro da janela, o editor quebra. Espera
-      // assentar e tira o foco antes de levar de volta.
-      await pipSleep(400);
-      pipBlurComposer();
-    });
-  }
-
-  // Mover a conversa de janela zera a rolagem (ela voltava para o começo).
-  // Rola até a última mensagem, repetindo enquanto o WhatsApp termina de
-  // desenhar e carregar as mensagens.
-  function pipScrollToEnd() {
-    if (pipWin && pipAppRoot) scrollChatToEnd(pipWin, pipAppRoot);
-  }
-
-  // Na janela recém-aberta os estilos ainda estão carregando e a área de
-  // mensagens não rola; tenta de novo até conseguir (máx. 4 s) e, depois
-  // de conseguir, repete mais um pouco para as mensagens que chegam por último.
-  function scrollChatToEnd(view, root) {
-    const scrollOnce = () => {
-      const main = root.querySelector("#main");
-      if (!main || !main.isConnected) return false;
-      let done = false;
-      for (const el of main.querySelectorAll("div")) {
-        if (el.scrollHeight <= el.clientHeight + 5) continue;
-        const oy = view.getComputedStyle(el).overflowY;
-        if (oy !== "auto" && oy !== "scroll") continue;
-        el.scrollTop = el.scrollHeight;
-        if (el.scrollTop > 0) done = true;
-      }
-      return done;
-    };
-    let tries = 0;
-    let extra = 0;
-    const tick = () => {
-      if (view.closed) return;
-      if (scrollOnce()) extra++;
-      if (extra >= 3 || ++tries > 25) return;
-      view.setTimeout(tick, 150);
-    };
-    tick();
-  }
-
-  function pipBlurComposer() {
-    const active = document.activeElement;
-    if (active && pipAppRoot && pipAppRoot.contains(active)) active.blur();
-    const sel = window.getSelection();
-    if (sel && pipAppRoot && sel.anchorNode && pipAppRoot.contains(sel.anchorNode)) {
-      sel.removeAllRanges();
-    }
-  }
-
-  // Barra de digitar da janela flutuante: envia pela barra original, na aba
-  function buildPipBar(doc) {
-    const bar = doc.createElement("form");
-    bar.id = "we-pip-bar";
-    bar.innerHTML = `
-      <textarea rows="1" placeholder="Digite uma mensagem"></textarea>
-      <button type="submit" title="Enviar">➤</button>`;
-    const input = bar.querySelector("textarea");
-    const btn = bar.querySelector("button");
-
-    // Altura da barra acompanha o texto; a conversa sobe junto
-    const autosize = () => {
-      input.style.height = "auto";
-      input.style.height = Math.min(input.scrollHeight, 120) + "px";
-      doc.documentElement.style.setProperty("--we-bar-h", bar.offsetHeight + "px");
-    };
-    input.addEventListener("input", () => {
-      input.classList.remove("we-error");
-      autosize();
-    });
-
-    // Enter envia; Shift+Enter quebra a linha
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        bar.requestSubmit();
-      }
-    });
-
-    bar.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const text = input.value.trim();
-      if (!text || btn.disabled) return;
-      btn.disabled = true;
-      const ok = await pipInTab(async () => {
-        const sent = await sendViaWhatsApp(text);
-        pipBlurComposer();
-        return sent;
-      });
-      btn.disabled = false;
-      if (ok) {
-        input.value = "";
-      } else {
-        input.classList.add("we-error");
-        input.title = "Não consegui enviar. O texto ficou no campo.";
-      }
-      autosize();
-      input.focus();
-    });
-
-    doc.body.appendChild(bar);
-    autosize();
-    input.focus();
-  }
-
-  // ---- Modo leve: cópia ao vivo da conversa + campo de resposta ---------
-
-  async function toggleLitePip() {
-    if (pipWin) {
-      pipWin.close();
-      return;
-    }
-    if (!document.getElementById("main")) {
-      alert("Abra uma conversa primeiro.");
-      return;
-    }
-    const win = await openPipWindow(400, 560);
-    if (!win) return;
-    pipWin = win;
-    pipMode = "lite";
-
-    setupPipDocument(pipWin.document);
-    pipWin.addEventListener("pagehide", cleanupPip);
 
     // Qualquer mudança na página pode ser mensagem nova ou troca de conversa
     pipObserver = new MutationObserver(schedulePipRender);
@@ -1292,38 +963,16 @@
   }
 
   function cleanupPip() {
-    // Modo completo: devolve o WhatsApp para a aba
-    if (pipObserver) pipObserver.disconnect();
-    if (pipAppRoot) {
-      pipAppRoot
-        .querySelectorAll(".we-pip-hide, .we-pip-main, .we-pip-offscreen, .we-pip-layout")
-        .forEach((el) =>
-          el.classList.remove("we-pip-hide", "we-pip-main", "we-pip-offscreen", "we-pip-layout")
-        );
-    }
-    if (pipAppRoot && pipPlaceholder) {
-      pipPlaceholder.replaceWith(pipAppRoot);
-      scrollChatToEnd(window, pipAppRoot);
-    }
-    if (pipPlaceholder) pipPlaceholder.remove();
-    pipAppRoot = null;
-    pipPlaceholder = null;
-    pipStrip = null;
-    pipStripKey = "";
-    if (pipHeadObserver) pipHeadObserver.disconnect();
-    pipHeadObserver = null;
-
     if (pipObserver) pipObserver.disconnect();
     pipObserver = null;
     pipWin = null;
-    pipMode = null;
     pipSig = "";
+    pipStripKey = "";
     updateMenuLabels();
   }
 
   // Timers da página ficam lentos com a aba em segundo plano; os da janela
   // flutuante (que está visível) não, então usamos os dela.
-  let pipLastRender = 0;
   function schedulePipRender() {
     if (!pipWin) return;
     pipWin.clearTimeout(pipTimer);
@@ -1349,13 +998,16 @@
 
     doc.body.innerHTML = `
       <div id="we-pip">
-        <div id="we-pip-head"><img id="we-pip-avatar" alt=""><span id="we-pip-name"></span></div>
-        <div id="we-pip-msgs"></div>
-        <form id="we-pip-form">
-          <textarea id="we-pip-input" rows="1" placeholder="Digite uma mensagem"></textarea>
-          <button id="we-pip-send" type="submit" title="Enviar">➤</button>
-        </form>
-        <div id="we-pip-status"></div>
+        <div id="we-pip-strip"></div>
+        <div id="we-pip-col">
+          <div id="we-pip-head"><img id="we-pip-avatar" alt=""><span id="we-pip-name"></span></div>
+          <div id="we-pip-msgs"></div>
+          <form id="we-pip-form">
+            <textarea id="we-pip-input" rows="1" placeholder="Digite uma mensagem"></textarea>
+            <button id="we-pip-send" type="submit" title="Enviar">➤</button>
+          </form>
+          <div id="we-pip-status"></div>
+        </div>
       </div>`;
 
     const form = doc.getElementById("we-pip-form");
@@ -1365,13 +1017,17 @@
 
     const autosize = () => {
       input.style.height = "auto";
-      input.style.height = input.scrollHeight + "px";
+      input.style.height = Math.min(input.scrollHeight, 120) + "px";
     };
-    input.addEventListener("input", autosize);
+    input.addEventListener("input", () => {
+      input.classList.remove("we-error");
+      status.textContent = "";
+      autosize();
+    });
 
     // Enter envia; Shift+Enter quebra a linha
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         form.requestSubmit();
       }
@@ -1380,20 +1036,33 @@
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = input.value.trim();
-      if (!text) return;
+      if (!text || send.disabled) return;
       send.disabled = true;
-      status.textContent = "Enviando...";
       const ok = await sendViaWhatsApp(text);
       send.disabled = false;
       if (ok) {
         input.value = "";
-        autosize();
         status.textContent = "";
       } else {
+        input.classList.add("we-error");
         status.textContent = "Não consegui enviar. O texto ficou no campo.";
       }
+      autosize();
       input.focus();
     });
+
+    input.focus();
+  }
+
+  // Nome da conversa aberta: a linha selecionada na lista; senão, a primeira
+  // linha do cabeçalho (o span[title] pode ser a lista de membros do grupo)
+  function currentChatName(header) {
+    const row = getChatRows().find(isSelectedRow);
+    if (row) {
+      const name = rowInfo(row).name;
+      if (name) return name;
+    }
+    return header ? header.innerText.split("\n")[0] : "";
   }
 
   function renderPip(force) {
@@ -1403,6 +1072,8 @@
     const nameEl = d.getElementById("we-pip-name");
     const avatar = d.getElementById("we-pip-avatar");
     if (!msgs) return;
+
+    renderPipStrip();
 
     const main = document.getElementById("main");
     if (!main) {
@@ -1416,12 +1087,7 @@
     }
 
     const header = main.querySelector("header");
-    const titleEl = header && header.querySelector("span[title]");
-    const name = titleEl
-      ? titleEl.title
-      : header
-      ? header.innerText.split("\n")[0]
-      : "";
+    const name = currentChatName(header);
     const rows = [...main.querySelectorAll('[role="row"]')];
     const last = rows.slice(-PIP_ROWS);
     const tail = last.length ? last[last.length - 1].textContent : "";
@@ -1435,8 +1101,7 @@
     if (headImg && headImg.src) avatar.src = headImg.src;
     else avatar.removeAttribute("src");
 
-    const atBottom =
-      msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
+    const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
 
     if (!last.length) {
       msgs.innerHTML = '<div id="we-pip-empty">Sem mensagens carregadas</div>';
@@ -1459,7 +1124,34 @@
     if (force || chatChanged || atBottom) msgs.scrollTop = msgs.scrollHeight;
   }
 
-  // Escreve no campo de mensagem do WhatsApp e envia
+  // Faixa de fotos: clicar abre a conversa na aba e a janela acompanha
+  function renderPipStrip() {
+    const d = pipWin.document;
+    const stripEl = d.getElementById("we-pip-strip");
+    if (!stripEl) return;
+
+    const rows = getChatRows();
+    const infos = rows.map(rowInfo);
+    const current = rows.findIndex(isSelectedRow);
+
+    // Só redesenha se algo mudou
+    const key =
+      current + "\n" + infos.map((i) => i.name + "|" + i.img + "|" + i.unread).join("\n");
+    if (key === pipStripKey) return;
+    pipStripKey = key;
+
+    const items = rows.map((row, idx) => {
+      const info = infos[idx];
+      const item = makeAvatarItem(d, info);
+      item.title = info.name;
+      if (idx === current) item.classList.add("we-current");
+      item.addEventListener("click", () => openChat(row, info.name));
+      return item;
+    });
+    stripEl.replaceChildren(...items);
+  }
+
+  // Escreve no campo de mensagem do WhatsApp (na aba) e envia
   async function sendViaWhatsApp(text) {
     const main = document.getElementById("main");
     const box =
@@ -1569,12 +1261,6 @@
       shortcut: "Alt+J",
       key: "KeyJ",
       run: togglePip,
-    },
-    {
-      id: "pip-lite",
-      label: () => "Janela flutuante leve (cópia)",
-      menu: () => !pipWin, // some enquanto alguma janela está aberta
-      run: toggleLitePip,
     },
   ];
 
@@ -1859,7 +1545,7 @@
       return !!(
         el &&
         el.closest &&
-        el.closest("#we-root, #we-strip, #we-card, #we-cover, #we-pip-placeholder")
+        el.closest("#we-root, #we-strip, #we-card, #we-cover")
       );
     };
 
