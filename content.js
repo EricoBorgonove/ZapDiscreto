@@ -740,6 +740,7 @@
   // ---------------------------------------------------------------------------
   function applyBlur() {
     document.documentElement.classList.toggle("we-blur", state.blur);
+    if (pipWin) pipWin.document.documentElement.classList.toggle("we-blur", state.blur);
     updateMenuLabels();
   }
 
@@ -890,6 +891,12 @@
     body:not(.dark) #we-pip-status { background: #f0f2f5; color: #111b21; }
     body:not(.dark) #we-pip-input { background: #fff; color: #111b21; }
     body:not(.dark) #we-pip-strip { background: rgba(0,0,0,.06); }
+
+    /* Modo desfocado: mensagens e nome da conversa aparecem com o mouse em cima */
+    html.we-blur #we-pip-msgs [role="row"], html.we-blur #we-pip-head {
+      filter: blur(4px); transition: filter .15s ease; }
+    html.we-blur #we-pip-msgs [role="row"]:hover, html.we-blur #we-pip-head:hover {
+      filter: none; }
   `;
 
   async function openPipWindow(width, height) {
@@ -995,6 +1002,7 @@
     style.textContent = PIP_CSS;
     doc.head.appendChild(style);
     doc.title = "WhatsApp";
+    doc.documentElement.classList.toggle("we-blur", state.blur);
 
     doc.body.innerHTML = `
       <div id="we-pip">
