@@ -101,8 +101,93 @@
   // Comunidades, Configurações...). O WhatsApp funciona normalmente até
   // ele voltar para Conversas; o modo salvo não muda.
   let suspended = false;
+  let suspendedByDrawer = false; // pausa por painel lateral (ex.: Nova conversa)
   let layoutParent = null; // container da barra de ícones + coluna + conversa
   let layoutCol = null; // coluna da esquerda
+
+  // Painéis como "Nova conversa" abrem numa camada própria, no lugar da
+  // coluna. Com a coluna escondida eles ficavam embolados com a lista
+  // flutuante/faixa de fotos. Fechada, essa camada fica vazia.
+  function drawerOpen() {
+    if (!layoutParent || !layoutParent.isConnected) return false;
+    const box = layoutParent.getBoundingClientRect();
+    const main = document.getElementById("main");
+    for (const layer of layoutParent.children) {
+      if (layer === layoutCol || (main && layer.contains(main))) continue;
+      if (getComputedStyle(layer).position !== "absolute") continue;
+      if (!layer.textContent.trim()) continue;
+      for (const panel of layer.children) {
+        const r = panel.getBoundingClientRect();
+        // Painel lateral: alto, encostado à esquerda e não ocupa a tela toda
+        // (menus são pequenos; o visualizador de fotos ocupa tudo)
+        if (
+          r.height >= box.height * 0.8 &&
+          r.width >= 200 &&
+          r.width < box.width * 0.6 &&
+          r.left < box.left + 200 &&
+          panel.textContent.trim()
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Camada do painel lateral que contém o elemento (ou null)
+  function drawerLayerOf(el) {
+    if (!layoutParent || !el) return null;
+    for (const layer of layoutParent.children) {
+      if (layer === layoutCol) continue;
+      if (layer.contains(el) && getComputedStyle(layer).position === "absolute") {
+        return layer;
+      }
+    }
+    return null;
+  }
+
+  // Clique numa conversa dentro de um painel (ex.: Arquivadas): se a
+  // conversa abrir, fecha o painel pelo "Voltar" e os modos voltam
+  function onDrawerClick(e) {
+    if (!suspendedByDrawer || !e.target.closest) return;
+    const row = e.target.closest('[role="row"], [role="listitem"]');
+    const layer = row && drawerLayerOf(row);
+    if (!layer) return;
+    const before = document.getElementById("main");
+    const beforeTitle = before && before.querySelector("header")?.innerText;
+    let tries = 0;
+    const check = () => {
+      const main = document.getElementById("main");
+      const title = main && main.querySelector("header")?.innerText;
+      const opened = main && (main !== before || title !== beforeTitle);
+      if (!opened) {
+        if (++tries < 10) setTimeout(check, 150); // espera até ~1,5 s
+        return;
+      }
+      const back = layer.querySelector(
+        'button[aria-label="Voltar"], button[aria-label="Back"], [data-icon="back"], [data-icon="arrow-back"]'
+      );
+      const btn = back && (back.closest('button, [role="button"]') || back);
+      if (btn) btn.click();
+    };
+    setTimeout(check, 150);
+  }
+
+  function checkDrawer() {
+    if (!colHidden() || panicActive) return;
+    if (suspended && !suspendedByDrawer) return; // pausado por Status/Canais
+    const open = drawerOpen();
+    if (open && !suspended) {
+      suspended = true;
+      suspendedByDrawer = true;
+      hideCard();
+      applySidebar();
+    } else if (!open && suspendedByDrawer) {
+      suspended = false;
+      suspendedByDrawer = false;
+      applySidebar();
+    }
+  }
 
   function applySidebar() {
     if (suspended) {
@@ -142,6 +227,7 @@
   function setSidebarMode(mode) {
     if (panicActive) setPanic(false);
     suspended = false;
+    suspendedByDrawer = false;
     state.sidebarMode = mode;
     saveState();
     applySidebar();
@@ -184,6 +270,7 @@
     removeClasses("we-divider-hidden", "we-divider-noborder");
     removeClasses("we-no-border");
     removeClasses("we-hidden-sidebar");
+    resetPopups();
     hiddenEl = null;
   }
 
@@ -252,6 +339,8 @@
     if (layoutCol && layoutCol.contains(btn)) return false;
     const main = document.getElementById("main");
     if (main && main.contains(btn)) return false;
+    // "Voltar" de painéis (Arquivadas, Nova conversa) também fica à esquerda
+    if (drawerLayerOf(btn)) return false;
     const r = btn.getBoundingClientRect();
     const p = layoutParent.getBoundingClientRect();
     return r.width > 0 && r.right <= p.left + 120;
@@ -272,9 +361,11 @@
     const chats = isChatsLabel(btn);
     if (chats && suspended) {
       suspended = false;
+      suspendedByDrawer = false;
       applySidebar();
-    } else if (!chats && !suspended) {
+    } else if (!chats && (!suspended || suspendedByDrawer)) {
       suspended = true;
+      suspendedByDrawer = false;
       applySidebar();
     }
   }
@@ -398,6 +489,54 @@
     stripTimer = setTimeout(renderStrip, 400);
   }
 
+  // Painéis soltos do WhatsApp (emojis, anexos, menus) são posicionados como
+  // se a lista estivesse lá e acabam por baixo da faixa de fotos / barra de
+  // ícones. Empurra para a direita até o começo da conversa.
+  const shiftedPopups = new Set();
+  function fixPopups() {
+    if (!colHidden() || suspended) return resetPopups();
+    const wrapper = document.querySelector(".app-wrapper-web");
+    const main = document.getElementById("main");
+    if (!wrapper || !main) return;
+    const minLeft = main.getBoundingClientRect().left + 8;
+    // Os painéis ficam em contêineres próprios, filhos do wrapper com
+    // altura 0 (ex.: #expressions-panel-container); o app em si é alto
+    // Busca só nos primeiros níveis e para no primeiro elemento posicionado
+    // (o painel de emojis tem centenas de itens dentro)
+    const popups = [];
+    const walk = (el, depth) => {
+      for (const child of el.children) {
+        const pos = getComputedStyle(child).position;
+        if (pos === "absolute" || pos === "fixed") popups.push(child);
+        else if (depth < 4) walk(child, depth + 1);
+      }
+    };
+    for (const box of wrapper.children) {
+      if (box.getBoundingClientRect().height === 0) walk(box, 1);
+    }
+    for (const el of popups) {
+      const shift = parseFloat(el.dataset.weShift || "0");
+      const r = el.getBoundingClientRect();
+      // Só painéis (tooltips são estreitos; camadas de tela cheia, largas)
+      if (r.width < 200 || r.width > window.innerWidth * 0.8 || r.height === 0) continue;
+      const baseLeft = r.left - shift;
+      const need = Math.max(0, Math.ceil(minLeft - baseLeft));
+      if (need === shift) continue;
+      el.style.marginLeft = need ? need + "px" : "";
+      el.dataset.weShift = String(need);
+      if (need) shiftedPopups.add(el);
+      else shiftedPopups.delete(el);
+    }
+  }
+
+  function resetPopups() {
+    for (const el of shiftedPopups) {
+      el.style.marginLeft = "";
+      delete el.dataset.weShift;
+    }
+    shiftedPopups.clear();
+  }
+
   // root: documento ou elemento onde procurar (a janela flutuante usa o dela)
   function getChatRows(root = document) {
     const pane = root.querySelector("#pane-side");
@@ -427,6 +566,9 @@
 
   function renderStrip() {
     if (!strip || !isAvatars()) return;
+    // A posição pode ter sido medida durante a animação de entrada do
+    // WhatsApp (tela ampliada) e ficar fora da tela; remede sempre
+    positionStrip();
     const rows = getChatRows();
     const infos = rows.map(rowInfo);
 
@@ -564,9 +706,21 @@
     document.addEventListener("wheel", () => hideCard(), { passive: true });
 
     window.addEventListener("resize", positionStrip);
+    // Fim da animação de entrada do WhatsApp: mede a faixa de novo
+    let posFrame = 0;
+    const positionSoon = () => {
+      if (!strip || posFrame) return;
+      posFrame = requestAnimationFrame(() => {
+        posFrame = 0;
+        positionStrip();
+      });
+    };
+    document.addEventListener("animationend", positionSoon, true);
+    document.addEventListener("transitionend", positionSoon, true);
 
     // Captura antes do WhatsApp redesenhar a tela
     document.addEventListener("click", onRailClick, true);
+    document.addEventListener("click", onDrawerClick, true);
 
     // Clique fora da lateral flutuante -> fecha
     document.addEventListener("mousedown", (e) => {
@@ -800,6 +954,11 @@
         top: 0 !important; width: 360px !important; height: 100vh !important;
         visibility: hidden !important; pointer-events: none !important; }
       .we-pip-layout { min-width: 0 !important; width: 100% !important; }
+      /* Botão "Adicionar à lista" do topo ocupa espaço demais na janela */
+      #main header :has(> button[aria-label="Adicionar à lista"]),
+      #main header :has(> button[aria-label="Add to list"]),
+      #main header span:has(> div > button[aria-label="Adicionar à lista"]),
+      #main header span:has(> div > button[aria-label="Add to list"]) { display: none !important; }
       .we-pip-main { flex: 1 1 auto !important; width: auto !important;
         max-width: none !important; min-width: 0 !important;
         margin-left: ${PIP_STRIP}px !important; border-left: none !important;
@@ -877,6 +1036,7 @@
     doc.body.appendChild(appRoot);
     pipOnlyChat();
     buildPipBar(doc);
+    pipScrollToEnd();
 
     // O WhatsApp redesenha partes da tela; reaplica "só a conversa"
     pipObserver = new MutationObserver(() => {
@@ -976,6 +1136,7 @@
         const body = pipWin.document.body;
         body.insertBefore(pipAppRoot, body.firstChild);
         pipOnlyChat();
+        pipScrollToEnd();
       }
       pipBusy = false;
     }
@@ -999,6 +1160,41 @@
       await pipSleep(400);
       pipBlurComposer();
     });
+  }
+
+  // Mover a conversa de janela zera a rolagem (ela voltava para o começo).
+  // Rola até a última mensagem, repetindo enquanto o WhatsApp termina de
+  // desenhar e carregar as mensagens.
+  function pipScrollToEnd() {
+    if (pipWin && pipAppRoot) scrollChatToEnd(pipWin, pipAppRoot);
+  }
+
+  // Na janela recém-aberta os estilos ainda estão carregando e a área de
+  // mensagens não rola; tenta de novo até conseguir (máx. 4 s) e, depois
+  // de conseguir, repete mais um pouco para as mensagens que chegam por último.
+  function scrollChatToEnd(view, root) {
+    const scrollOnce = () => {
+      const main = root.querySelector("#main");
+      if (!main || !main.isConnected) return false;
+      let done = false;
+      for (const el of main.querySelectorAll("div")) {
+        if (el.scrollHeight <= el.clientHeight + 5) continue;
+        const oy = view.getComputedStyle(el).overflowY;
+        if (oy !== "auto" && oy !== "scroll") continue;
+        el.scrollTop = el.scrollHeight;
+        if (el.scrollTop > 0) done = true;
+      }
+      return done;
+    };
+    let tries = 0;
+    let extra = 0;
+    const tick = () => {
+      if (view.closed) return;
+      if (scrollOnce()) extra++;
+      if (extra >= 3 || ++tries > 25) return;
+      view.setTimeout(tick, 150);
+    };
+    tick();
   }
 
   function pipBlurComposer() {
@@ -1107,6 +1303,7 @@
     }
     if (pipAppRoot && pipPlaceholder) {
       pipPlaceholder.replaceWith(pipAppRoot);
+      scrollChatToEnd(window, pipAppRoot);
     }
     if (pipPlaceholder) pipPlaceholder.remove();
     pipAppRoot = null;
@@ -1667,9 +1864,20 @@
     };
 
     let fixTimer = null;
+    let drawerTimer = null;
     const observer = new MutationObserver((records) => {
-      if (!colHidden() || suspended) return;
+      if (!colHidden()) return;
       if (records.every((r) => isOurs(r.target))) return;
+
+      // Painel lateral abrindo/fechando (ex.: Nova conversa)
+      if (!suspended || suspendedByDrawer) {
+        clearTimeout(drawerTimer);
+        drawerTimer = setTimeout(checkDrawer, 80);
+      }
+      if (suspended) return;
+
+      // Painel de emojis/anexos recém-aberto: corrige antes de aparecer
+      requestAnimationFrame(fixPopups);
 
       if (!(hiddenEl && hiddenEl.isConnected)) applySidebar();
       // A divisória pode ser recriada (ex.: ao trocar de conversa)
