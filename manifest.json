@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Whats Edit",
+  "name": "Zap Discreto",
   "version": "0.1.0",
-  "description": "Botão de ferramentas para o WhatsApp Web (ex.: esconder a lista de conversas).",
+  "description": "Privacidade para o WhatsApp Web: esconde conversas, desfoca textos, botão de pânico e janela flutuante.",
   "permissions": ["storage"],
   "content_scripts": [
     {

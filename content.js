@@ -212,7 +212,7 @@
       reapplyTimes.shift();
     }
     if (reapplyTimes.length > 15) {
-      console.warn("[Whats Edit] loop detectado; voltando ao modo visível");
+      console.warn("[Zap Discreto] loop detectado; voltando ao modo visível");
       reapplyTimes.length = 0;
       state.sidebarMode = "visible";
       saveState();
@@ -295,7 +295,7 @@
 
       if (r.width <= 6 && !el.classList.contains("we-divider-hidden")) {
         el.classList.add("we-divider-hidden");
-        console.debug("[Whats Edit] divisória fina escondida:", el);
+        console.debug("[Zap Discreto] divisória fina escondida:", el);
         continue;
       }
 
@@ -304,7 +304,7 @@
       const borderLeft = parseFloat(cs.borderLeftWidth) > 0 && near(r.left);
       if ((borderRight || borderLeft) && !el.classList.contains("we-divider-noborder")) {
         el.classList.add("we-divider-noborder");
-        console.debug("[Whats Edit] borda removida:", el);
+        console.debug("[Zap Discreto] borda removida:", el);
       }
     }
   }
@@ -907,7 +907,7 @@
     try {
       return await documentPictureInPicture.requestWindow({ width, height });
     } catch (err) {
-      console.warn("[Whats Edit] não foi possível abrir a janela flutuante:", err);
+      console.warn("[Zap Discreto] não foi possível abrir a janela flutuante:", err);
       return null;
     }
   }
@@ -1226,7 +1226,7 @@
         if (!pipWin && !panicActive && document.getElementById("main")) togglePip();
       });
     } catch (err) {
-      console.debug("[Whats Edit] abertura automática indisponível:", err);
+      console.debug("[Zap Discreto] abertura automática indisponível:", err);
     }
   }
 
@@ -1438,7 +1438,7 @@
 
     fab = document.createElement("button");
     fab.id = "we-fab";
-    fab.title = "Whats Edit";
+    fab.title = "Zap Discreto";
     fab.textContent = "⚙";
 
     root.appendChild(menu);
